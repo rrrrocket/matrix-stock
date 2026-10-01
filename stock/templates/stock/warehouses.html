@@ -1,0 +1,9 @@
+{% extends 'stock/base.html' %}
+{% block title %}仓库设置 · Matrix Stock{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">WAREHOUSES</div><h1>仓库设置</h1><p>每个仓库的库存单独计算，订单出库时选择实际发货仓。</p></div></div>
+<div class="section-grid narrow-right">
+  <section class="card panel"><div class="panel-head"><h2>仓库列表</h2></div><div class="table-wrap"><table><thead><tr><th>编码</th><th>仓库</th><th>状态</th><th>创建时间</th></tr></thead><tbody>{% for warehouse in warehouses %}<tr><td><code>{{ warehouse.code }}</code></td><td><b>{{ warehouse.name }}</b></td><td><span class="pill">{% if warehouse.is_active %}启用{% else %}停用{% endif %}</span></td><td>{{ warehouse.created_at|date:'Y-m-d' }}</td></tr>{% empty %}<tr><td colspan="4" class="empty-cell">先添加一个自有仓库</td></tr>{% endfor %}</tbody></table></div></section>
+  <section class="card panel"><div class="panel-head"><h2>新增仓库</h2></div><form method="post" class="form-stack">{% csrf_token %}<label>仓库编码<input name="code" maxlength="40" required></label><label>仓库名称<input name="name" maxlength="100" required></label><button class="button primary" type="submit">创建仓库</button></form></section>
+</div>
+{% endblock %}

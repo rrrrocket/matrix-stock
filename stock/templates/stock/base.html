@@ -1,0 +1,30 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Matrix Stock{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'stock/app.css' %}">
+  <script defer src="{% static 'stock/app.js' %}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% url 'dashboard' %}"><span class="brand-mark">M</span><span>Matrix <b>Stock</b></span></a>
+    {% if user.is_authenticated %}
+    <nav class="nav" aria-label="主导航">
+      <a class="{% if active_nav == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">概览</a>
+      <a class="{% if active_nav == 'orders' %}active{% endif %}" href="{% url 'orders' %}">订单待处理</a>
+      <a class="{% if active_nav == 'inventory' %}active{% endif %}" href="{% url 'inventory' %}">自有仓库存</a>
+      <a class="{% if active_nav == 'movements' %}active{% endif %}" href="{% url 'movements' %}">出入库流水</a>
+      <a class="{% if active_nav == 'warehouses' %}active{% endif %}" href="{% url 'warehouses' %}">仓库设置</a>
+    </nav>
+    <div class="user-actions"><span>{{ user.username }}</span><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="text-button" type="submit">退出</button></form></div>
+    {% endif %}
+  </header>
+  <main class="page">
+    {% if messages %}<div class="flash-stack" role="status">{% for message in messages %}<div class="flash flash-{{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

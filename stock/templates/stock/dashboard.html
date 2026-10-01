@@ -1,0 +1,19 @@
+{% extends 'stock/base.html' %}
+{% block title %}概览 · Matrix Stock{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">OVERVIEW</div><h1>库存概览</h1><p>自有仓库存独立记账，订单出库后才扣减。</p></div><a class="button primary" href="{% url 'orders' %}">处理订单</a></div>
+<div class="metric-grid">
+  <div class="card metric"><span>待处理订单商品</span><strong>{{ pending_count }}</strong><small>有自有仓库存且尚未完成出库</small></div>
+  <div class="card metric"><span>现有实物库存</span><strong>{{ stock_total }}</strong><small>所有仓库合计件数</small></div>
+  <div class="card metric"><span>在库货号</span><strong>{{ sku_count }}</strong><small>已登记的商品货号</small></div>
+  <div class="card metric"><span>启用仓库</span><strong>{{ warehouse_count }}</strong><small>独立管理每个仓库库存</small></div>
+</div>
+<div class="section-grid">
+  <section class="card panel"><div class="panel-head"><div><h2>优先处理</h2><p>这些订单与自有仓库存匹配</p></div><a href="{% url 'orders' %}">查看全部 →</a></div>
+    {% if pending_rows %}<div class="compact-list">{% for line in pending_rows %}<div class="compact-row"><div><b>{{ line.sku }}</b><span>{{ line.order.store_name }} · {{ line.order.external_order_id }}</span></div><div class="right"><strong>需 {{ line.remaining_quantity }} / 有 {{ line.total_available }}</strong><a href="{% url 'orders' %}">去出库</a></div></div>{% endfor %}</div>{% else %}<div class="empty">暂无匹配自有仓库存的待处理订单</div>{% endif %}
+  </section>
+  <section class="card panel"><div class="panel-head"><div><h2>最近库存变动</h2><p>每一笔出入库均有记录</p></div><a href="{% url 'movements' %}">查看流水 →</a></div>
+    {% if recent_movements %}<div class="compact-list">{% for movement in recent_movements %}<div class="compact-row"><div><b>{{ movement.item.sku }}</b><span>{{ movement.warehouse.name }} · {{ movement.get_movement_type_display }}</span></div><div class="right"><strong class="{% if movement.quantity_change > 0 %}positive{% else %}negative{% endif %}">{{ movement.quantity_change|stringformat:'+d' }}</strong><small>{{ movement.created_at|date:'m-d H:i' }}</small></div></div>{% endfor %}</div>{% else %}<div class="empty">还没有出入库记录</div>{% endif %}
+  </section>
+</div>
+{% endblock %}

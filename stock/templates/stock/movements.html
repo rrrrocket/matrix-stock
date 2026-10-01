@@ -1,0 +1,6 @@
+{% extends 'stock/base.html' %}
+{% block title %}出入库流水 · Matrix Stock{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">MOVEMENTS</div><h1>出入库流水</h1><p>每次变动保留仓库、货号、关联订单及操作人。</p></div></div>
+<section class="card panel"><form method="get" class="filter-row"><input name="q" value="{{ query }}" aria-label="搜索货号或订单"><button class="button secondary" type="submit">搜索</button></form><div class="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>仓库</th><th>货号</th><th>关联订单</th><th class="number">变动</th><th class="number">变动后</th><th>操作人</th></tr></thead><tbody>{% for movement in movements %}<tr><td>{{ movement.created_at|date:'Y-m-d H:i' }}</td><td>{{ movement.get_movement_type_display }}</td><td>{{ movement.warehouse.name }}</td><td><b>{{ movement.item.sku }}</b></td><td>{% if movement.order_line %}{{ movement.order_line.order.external_order_id }}{% else %}{{ movement.note|default:'—' }}{% endif %}</td><td class="number {% if movement.quantity_change > 0 %}positive{% else %}negative{% endif %}">{{ movement.quantity_change|stringformat:'+d' }}</td><td class="number">{{ movement.after_quantity }}</td><td>{{ movement.operator.username|default:'系统' }}</td></tr>{% empty %}<tr><td colspan="8" class="empty-cell">暂无出入库记录</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}
