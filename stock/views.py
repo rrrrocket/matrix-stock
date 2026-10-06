@@ -6,6 +6,8 @@ from collections import defaultdict
 from functools import wraps
 
 from django.contrib import messages
+from django.contrib.auth import authenticate
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q, Sum
@@ -224,6 +226,31 @@ def health(request):
     return JsonResponse({"status": "ok"})
 
 
+@csrf_exempt
+@require_POST
+def verify_account_api(request):
+    """Verify a Stock staff account for an ERP-side binding; never persist its password."""
+    configured_key = os.environ.get("STOCK_ERP_API_KEY", "")
+    if not configured_key:
+        return JsonResponse({"error": "账号绑定接口尚未配置"}, status=503)
+    if not secrets.compare_digest(configured_key, request.headers.get("X-Stock-Key", "")):
+        return JsonResponse({"error": "无效的接口密钥"}, status=401)
+    if len(request.body) > 4096:
+        return JsonResponse({"error": "请求过大"}, status=413)
+    try:
+        payload = json.loads(request.body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JsonResponse({"error": "无效的JSON"}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "无效的账号信息"}, status=400)
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    user = authenticate(request, username=username, password=password)
+    if user is None or not user.is_active or not user.is_staff:
+        return JsonResponse({"error": "Stock 用户名或密码不正确，或账号无员工权限"}, status=401)
+    return JsonResponse({"user_id": user.pk, "username": user.get_username()})
+
+
 @require_GET
 def catalog_api(request):
     """Read-only ERP catalog, including items that currently have zero stock."""
@@ -232,6 +259,11 @@ def catalog_api(request):
         return JsonResponse({"error": "目录接口尚未配置"}, status=503)
     if not secrets.compare_digest(configured_key, request.headers.get("X-Stock-Key", "")):
         return JsonResponse({"error": "无效的接口密钥"}, status=401)
+    stock_user_id = request.headers.get("X-Stock-User-Id", "")
+    if not stock_user_id.isdecimal() or not get_user_model().objects.filter(
+        pk=int(stock_user_id), is_active=True, is_staff=True,
+    ).exists():
+        return JsonResponse({"error": "Stock 账号绑定无效"}, status=403)
     balances = defaultdict(list)
     for balance in StockBalance.objects.select_related("warehouse").order_by("warehouse__code"):
         balances[balance.item_id].append({

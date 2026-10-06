@@ -20,6 +20,7 @@ urlpatterns = [
     path("orders/<int:line_id>/outbound/", views.outbound, name="outbound"),
     path("orders/<int:line_id>/skip/", views.skip_order_line, name="skip_order_line"),
     path("api/health/", views.health, name="health"),
+    path("api/account/verify/", views.verify_account_api, name="verify_account_api"),
     path("api/catalog/", views.catalog_api, name="catalog_api"),
     path("api/orders/", views.order_webhook, name="order_webhook"),
 ]
