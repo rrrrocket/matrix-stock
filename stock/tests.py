@@ -10,7 +10,7 @@ from django.test import TestCase
 from django.urls import reverse
 from openpyxl import Workbook
 
-from .models import ExternalOrder, OrderAlert, OrderLine, StockBalance, StockMovement, Warehouse
+from .models import ExternalOrder, OrderAlert, OrderLine, StockBalance, StockItem, StockMovement, Warehouse
 from .notifications import dispatch_pending_alerts
 from .services import StockError, import_opening_stock, record_inbound, record_outbound, upsert_external_order
 
@@ -80,6 +80,30 @@ class StockFlowTests(TestCase):
         self.payload["items"].append({"sku": "SKU-1", "quantity": 2})
         order, _ = upsert_external_order(self.payload)
         self.assertEqual(order.lines.get().quantity, 7)
+
+    def test_erp_space_and_dash_skus_remain_distinct(self):
+        record_inbound(warehouse_id=self.a.id, sku="品牌 型号", quantity=1, operator=self.user)
+        record_inbound(warehouse_id=self.a.id, sku="品牌-型号", quantity=1, operator=self.user)
+        self.assertTrue(StockItem.objects.filter(sku="品牌 型号").exists())
+        self.assertTrue(StockItem.objects.filter(sku="品牌-型号").exists())
+
+    def test_versioned_snapshot_rejects_stale_changes_and_preserves_outbound(self):
+        self.payload["version"] = 1
+        order, _ = upsert_external_order(self.payload)
+        line = order.lines.get()
+        record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=2, operator=self.user, operation_id=uuid.uuid4())
+        self.payload["version"] = 2
+        self.payload["status"] = "cancelled"
+        upsert_external_order(self.payload)
+        self.payload["version"] = 1
+        self.payload["status"] = "open"
+        with self.assertRaises(StockError):
+            upsert_external_order(self.payload)
+        order.refresh_from_db()
+        line.refresh_from_db()
+        self.assertEqual(order.status, "cancelled")
+        self.assertEqual(order.snapshot_version, 2)
+        self.assertEqual(line.outbound_quantity, 2)
 
     def test_webhook_requires_configured_key(self):
         with patch.dict(os.environ, {"STOCK_ERP_API_KEY": "test-key"}):

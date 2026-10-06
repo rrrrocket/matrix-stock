@@ -12,6 +12,7 @@ if [[ ! -x .venv/bin/python ]]; then
 fi
 uv pip install --python .venv/bin/python -r requirements.txt
 .venv/bin/python manage.py migrate
+.venv/bin/python manage.py sync_admin
 if [[ "${1:-web}" == "worker" ]]; then
   exec .venv/bin/python manage.py dispatch_alerts
 fi

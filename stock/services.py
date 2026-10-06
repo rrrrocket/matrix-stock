@@ -152,6 +152,9 @@ def _required_text(payload, key, max_length):
 def upsert_external_order(payload):
     if not isinstance(payload, dict):
         raise StockError("订单数据必须是对象")
+    version = payload.get("version")
+    if version is not None and (type(version) is not int or version <= 0):
+        raise StockError("version必须是正整数")
     platform = _required_text(payload, "platform", 40)
     store_external_id = _required_text(payload, "store_id", 80)
     store_name = _required_text(payload, "store_name", 150)
@@ -183,13 +186,20 @@ def upsert_external_order(payload):
 
     order, created = ExternalOrder.objects.select_for_update().get_or_create(
         platform=platform, store_external_id=store_external_id, external_order_id=external_order_id,
-        defaults={"store_name": store_name, "status": status, "ordered_at": ordered_at},
+        defaults={"store_name": store_name, "status": status, "ordered_at": ordered_at, "snapshot_version": version or 0},
     )
     if not created:
+        if order.snapshot_version and version is None:
+            raise StockError("该订单需要带version的快照")
+        if version is not None and version < order.snapshot_version:
+            raise StockError("过期的订单快照")
+        if version is not None and version == order.snapshot_version:
+            return order, False
         order.store_name = store_name
         order.status = status
         order.ordered_at = ordered_at or order.ordered_at
-        order.save(update_fields=["store_name", "status", "ordered_at", "updated_at"])
+        order.snapshot_version = version or 0
+        order.save(update_fields=["store_name", "status", "ordered_at", "snapshot_version", "updated_at"])
     OrderLine.objects.filter(order=order).exclude(sku__in=quantities).update(is_present=False)
     for sku, quantity in quantities.items():
         line, line_created = OrderLine.objects.get_or_create(

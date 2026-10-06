@@ -52,6 +52,7 @@ class ExternalOrder(models.Model):
     store_name = models.CharField("店铺", max_length=150)
     external_order_id = models.CharField("平台订单号", max_length=150)
     status = models.CharField("状态", max_length=16, choices=Status.choices, default=Status.OPEN)
+    snapshot_version = models.PositiveBigIntegerField("ERP快照版本", default=0)
     ordered_at = models.DateTimeField("下单时间", null=True, blank=True)
     received_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
