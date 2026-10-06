@@ -1,7 +1,10 @@
 import json
+import hashlib
+import hmac
 import os
 import uuid
 from io import BytesIO
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -40,14 +43,35 @@ class StockFlowTests(TestCase):
         self.assertEqual(len(items["SKU-1"]["warehouses"]), 2)
 
     @patch.dict(os.environ, {"STOCK_ERP_API_KEY": "test-key"})
-    def test_verify_account_requires_service_key_and_real_staff_credentials(self):
-        url = reverse("verify_account_api")
-        payload = json.dumps({"username": "warehouse", "password": "test-password"})
-        self.assertEqual(self.client.post(url, payload, content_type="application/json").status_code, 401)
-        response = self.client.post(url, payload, content_type="application/json", HTTP_X_STOCK_KEY="test-key")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["user_id"], self.user.pk)
-        self.assertEqual(self.client.post(url, json.dumps({"username": "warehouse", "password": "wrong"}), content_type="application/json", HTTP_X_STOCK_KEY="test-key").status_code, 401)
+    def test_erp_login_grant_is_signed_and_single_use(self):
+        state = "erp-signed-state"
+        return_url = "http://localhost:3000/inventory?tab=warehouse"
+        signature = hmac.new(b"test-key", f"{state}|{return_url}".encode(), hashlib.sha256).hexdigest()
+        connect_url = reverse("erp_connect")
+        params = {"state": state, "return_url": return_url, "signature": signature}
+        login_redirect = self.client.get(connect_url, params)
+        self.assertEqual(login_redirect.status_code, 302)
+        login_response = self.client.post(login_redirect["Location"], {
+            "username": "warehouse", "password": "test-password",
+        })
+        self.assertEqual(login_response.status_code, 302)
+        self.assertIn("/erp/connect/", login_response["Location"])
+        bad = self.client.get(connect_url, {**params, "signature": "wrong"})
+        self.assertEqual(bad.status_code, 403)
+        bad_origin = "https://attacker.example/inventory?tab=warehouse"
+        bad_signature = hmac.new(b"test-key", f"{state}|{bad_origin}".encode(), hashlib.sha256).hexdigest()
+        self.assertEqual(self.client.get(connect_url, {**params, "return_url": bad_origin, "signature": bad_signature}).status_code, 403)
+        response = self.client.get(connect_url, params)
+        self.assertEqual(response.status_code, 302)
+        callback = urlsplit(response["Location"])
+        self.assertEqual(callback.netloc, "localhost:3000")
+        code = parse_qs(callback.query)["stock_code"][0]
+        payload = json.dumps({"state": state, "code": code})
+        exchange_url = reverse("erp_link_exchange")
+        first = self.client.post(exchange_url, payload, content_type="application/json", HTTP_X_STOCK_KEY="test-key")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["user_id"], self.user.pk)
+        self.assertEqual(self.client.post(exchange_url, payload, content_type="application/json", HTTP_X_STOCK_KEY="test-key").status_code, 400)
 
     def test_multiple_warehouses_can_fulfill_one_order_without_double_deducting(self):
         order, created = upsert_external_order(self.payload)

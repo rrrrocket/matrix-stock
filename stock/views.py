@@ -1,22 +1,27 @@
 import json
+import hashlib
+import hmac
 import os
 import secrets
 import uuid
 from collections import defaultdict
+from datetime import timedelta
 from functools import wraps
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.contrib import messages
-from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q, Sum
+from django.db import transaction
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
+from django.utils import timezone
 
-from .models import ExternalOrder, OrderLine, StockBalance, StockItem, StockMovement, Warehouse
+from .models import ErpLinkGrant, ExternalOrder, OrderLine, StockBalance, StockItem, StockMovement, Warehouse
 from .services import StockError, adjust_stock, import_opening_stock, record_inbound, record_outbound, upsert_external_order
 
 
@@ -226,14 +231,43 @@ def health(request):
     return JsonResponse({"status": "ok"})
 
 
+@staff_required
+@require_GET
+def erp_connect(request):
+    """Complete the browser login leg of an ERP↔Stock account link."""
+    state = request.GET.get("state", "")
+    return_url = request.GET.get("return_url", "")
+    signature = request.GET.get("signature", "")
+    key = os.environ.get("STOCK_ERP_API_KEY", "")
+    if not key or not state or not return_url or len(state) > 1000 or len(return_url) > 500:
+        return JsonResponse({"error": "绑定请求无效"}, status=400)
+    parsed = urlsplit(return_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.fragment or parsed.path != "/inventory":
+        return JsonResponse({"error": "返回地址无效"}, status=400)
+    allowed_origins = {
+        origin.strip().rstrip("/") for origin in
+        os.environ.get("STOCK_ERP_RETURN_ORIGINS", "http://localhost:3000").split(",") if origin.strip()
+    }
+    if f"{parsed.scheme}://{parsed.netloc}" not in allowed_origins:
+        return JsonResponse({"error": "ERP 返回地址未获准"}, status=403)
+    expected = hmac.new(key.encode(), f"{state}|{return_url}".encode(), hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(expected, signature):
+        return JsonResponse({"error": "绑定签名无效"}, status=403)
+    code = secrets.token_urlsafe(32)
+    ErpLinkGrant.objects.create(
+        user=request.user, code_hash=hashlib.sha256(code.encode()).hexdigest(),
+        state=state, expires_at=timezone.now() + timedelta(minutes=5),
+    )
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update({"stock_state": state, "stock_code": code})
+    return redirect(urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), "")))
+
+
 @csrf_exempt
 @require_POST
-def verify_account_api(request):
-    """Verify a Stock staff account for an ERP-side binding; never persist its password."""
-    configured_key = os.environ.get("STOCK_ERP_API_KEY", "")
-    if not configured_key:
-        return JsonResponse({"error": "账号绑定接口尚未配置"}, status=503)
-    if not secrets.compare_digest(configured_key, request.headers.get("X-Stock-Key", "")):
+def erp_link_exchange(request):
+    key = os.environ.get("STOCK_ERP_API_KEY", "")
+    if not key or not secrets.compare_digest(key, request.headers.get("X-Stock-Key", "")):
         return JsonResponse({"error": "无效的接口密钥"}, status=401)
     if len(request.body) > 4096:
         return JsonResponse({"error": "请求过大"}, status=413)
@@ -242,13 +276,21 @@ def verify_account_api(request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "无效的JSON"}, status=400)
     if not isinstance(payload, dict):
-        return JsonResponse({"error": "无效的账号信息"}, status=400)
-    username = str(payload.get("username") or "").strip()
-    password = str(payload.get("password") or "")
-    user = authenticate(request, username=username, password=password)
-    if user is None or not user.is_active or not user.is_staff:
-        return JsonResponse({"error": "Stock 用户名或密码不正确，或账号无员工权限"}, status=401)
-    return JsonResponse({"user_id": user.pk, "username": user.get_username()})
+        return JsonResponse({"error": "绑定凭据无效"}, status=400)
+    code = str(payload.get("code") or "")
+    state = str(payload.get("state") or "")
+    if not code or not state:
+        return JsonResponse({"error": "绑定凭据无效"}, status=400)
+    with transaction.atomic():
+        grant = ErpLinkGrant.objects.select_for_update().select_related("user").filter(
+            code_hash=hashlib.sha256(code.encode()).hexdigest(), state=state,
+            consumed_at__isnull=True, expires_at__gt=timezone.now(),
+        ).first()
+        if grant is None or not grant.user.is_active or not grant.user.is_staff:
+            return JsonResponse({"error": "绑定凭据已失效"}, status=400)
+        grant.consumed_at = timezone.now()
+        grant.save(update_fields=["consumed_at"])
+    return JsonResponse({"user_id": grant.user_id, "username": grant.user.get_username()})
 
 
 @require_GET

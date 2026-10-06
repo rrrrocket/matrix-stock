@@ -30,6 +30,16 @@ class StockItem(models.Model):
         return self.sku
 
 
+class ErpLinkGrant(models.Model):
+    """Short-lived, single-use code proving a Stock staff login to the ERP."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    code_hash = models.CharField(max_length=64, unique=True)
+    state = models.TextField()
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+
 class StockBalance(models.Model):
     warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="balances")
     item = models.ForeignKey(StockItem, on_delete=models.PROTECT, related_name="balances")
