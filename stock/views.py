@@ -224,6 +224,27 @@ def health(request):
     return JsonResponse({"status": "ok"})
 
 
+@require_GET
+def catalog_api(request):
+    """Read-only ERP catalog, including items that currently have zero stock."""
+    configured_key = os.environ.get("STOCK_ERP_API_KEY", "")
+    if not configured_key:
+        return JsonResponse({"error": "目录接口尚未配置"}, status=503)
+    if not secrets.compare_digest(configured_key, request.headers.get("X-Stock-Key", "")):
+        return JsonResponse({"error": "无效的接口密钥"}, status=401)
+    balances = defaultdict(list)
+    for balance in StockBalance.objects.select_related("warehouse").order_by("warehouse__code"):
+        balances[balance.item_id].append({
+            "warehouse_code": balance.warehouse.code,
+            "warehouse_name": balance.warehouse.name,
+            "quantity": balance.on_hand,
+        })
+    return JsonResponse({"items": [
+        {"sku": item.sku, "name": item.name, "warehouses": balances[item.id]}
+        for item in StockItem.objects.order_by("sku")
+    ]})
+
+
 @csrf_exempt
 @require_POST
 def order_webhook(request):

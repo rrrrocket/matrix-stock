@@ -28,6 +28,16 @@ class StockFlowTests(TestCase):
             "items": [{"sku": "SKU-1", "name": "测试商品", "quantity": 5}],
         }
 
+    @patch.dict(os.environ, {"STOCK_ERP_API_KEY": "test-key"})
+    def test_catalog_api_requires_key_and_lists_zero_stock_items(self):
+        StockItem.objects.create(sku="ZERO-1", name="无库存商品")
+        self.assertEqual(self.client.get(reverse("catalog_api")).status_code, 401)
+        response = self.client.get(reverse("catalog_api"), HTTP_X_STOCK_KEY="test-key")
+        self.assertEqual(response.status_code, 200)
+        items = {item["sku"]: item for item in response.json()["items"]}
+        self.assertEqual(items["ZERO-1"]["warehouses"], [])
+        self.assertEqual(len(items["SKU-1"]["warehouses"]), 2)
+
     def test_multiple_warehouses_can_fulfill_one_order_without_double_deducting(self):
         order, created = upsert_external_order(self.payload)
         self.assertTrue(created)
