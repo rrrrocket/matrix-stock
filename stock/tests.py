@@ -181,6 +181,11 @@ class StockFlowTests(TestCase):
                 reverse("order_webhook"), data=json.dumps(self.payload), content_type="application/json",
                 HTTP_X_STOCK_KEY="test-key",
             )
+            self.assertEqual(response.status_code, 403)
+            response = self.client.post(
+                reverse("order_webhook"), data=json.dumps(self.payload), content_type="application/json",
+                HTTP_X_STOCK_KEY="test-key", HTTP_X_STOCK_USER_ID=str(self.user.pk),
+            )
             self.assertEqual(response.status_code, 200)
             self.assertEqual(ExternalOrder.objects.count(), 1)
 

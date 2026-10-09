@@ -343,6 +343,11 @@ def order_webhook(request):
     provided_key = request.headers.get("X-Stock-Key", "")
     if not secrets.compare_digest(configured_key, provided_key):
         return JsonResponse({"error": "无效的接口密钥"}, status=401)
+    stock_user_id = request.headers.get("X-Stock-User-Id", "")
+    if not stock_user_id.isdecimal() or not get_user_model().objects.filter(
+        pk=int(stock_user_id), is_active=True, is_staff=True,
+    ).exists():
+        return JsonResponse({"error": "Stock 账号绑定无效"}, status=403)
     if len(request.body) > 1024 * 1024:
         return JsonResponse({"error": "订单数据过大"}, status=413)
     try:
