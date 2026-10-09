@@ -19,6 +19,7 @@
       <a class="{% if active_nav == 'inventory' %}active{% endif %}" href="{% url 'inventory' %}">自有仓库存</a>
       <a class="{% if active_nav == 'movements' %}active{% endif %}" href="{% url 'movements' %}">出入库流水</a>
       <a class="{% if active_nav == 'warehouses' %}active{% endif %}" href="{% url 'warehouses' %}">仓库设置</a>
+      {% if perms.auth.change_user %}<a href="{% url 'stock_admin_users' %}">用户管理</a>{% endif %}
     </nav>
     <div class="user-actions"><span>{{ user.username }}</span><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="text-button" type="submit">退出</button></form></div>
     {% endif %}

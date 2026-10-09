@@ -1,0 +1,17 @@
+{% extends "admin/base.html" %}
+{% load i18n static %}
+
+{% block title %}{% if title %}{{ title }} · {% endif %}库存管理系统后台{% endblock %}
+{% block dark-mode-vars %}{% endblock %}
+{% block extrastyle %}{{ block.super }}<link rel="icon" type="image/svg+xml" href="{% static 'stock/favicon.svg' %}">{% endblock %}
+{% block responsive %}{{ block.super }}<link rel="stylesheet" href="{% static 'stock/admin.css' %}">{% endblock %}
+
+{% block branding %}
+<a class="stock-admin-brand" href="{% url 'stock_admin_users' %}"><img src="{% static 'stock/favicon.svg' %}" alt=""><span>Matrix <b>Stock</b></span><small>管理中心</small></a>
+{% endblock %}
+
+{% block userlinks %}
+<a href="{% url 'dashboard' %}">返回库存系统</a>
+{% if user.has_usable_password %}<a href="{% url 'admin:password_change' %}">修改密码</a>{% endif %}
+<form id="logout-form" method="post" action="{% url 'admin:logout' %}">{% csrf_token %}<button type="submit">退出</button></form>
+{% endblock %}

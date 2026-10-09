@@ -2,11 +2,12 @@ from django.contrib import admin
 from django.contrib.auth.views import LoginView, LogoutView
 from django.urls import path
 
-from stock import views
+from stock import admin_views, views
 from stock.forms import StockLoginForm
 
 
 urlpatterns = [
+    path("admin/", admin.site.admin_view(admin_views.users), name="stock_admin_users"),
     path("admin/", admin.site.urls),
     path("login/", LoginView.as_view(template_name="stock/login.html", authentication_form=StockLoginForm), name="login"),
     path("register/", views.register, name="register"),

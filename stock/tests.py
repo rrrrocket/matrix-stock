@@ -246,3 +246,64 @@ class StockFlowTests(TestCase):
             "username": "new-operator", "password": "WarehousePass-2026!",
         })
         self.assertRedirects(response, reverse("dashboard"))
+
+
+class AdminReviewTests(TestCase):
+    def setUp(self):
+        self.admin_user = get_user_model().objects.create_superuser(username="admin-review", password="admin-test-password")
+        self.pending = get_user_model().objects.create_user(username="pending-review", password="operator-test-password")
+        self.url = reverse("stock_admin_users")
+
+    def test_review_and_user_management_page_requires_user_admin_permission(self):
+        self.assertRedirects(self.client.get(self.url), f"/admin/login/?next={self.url}")
+        regular_member = get_user_model().objects.create_user(username="member", password="member-test-password", is_staff=True)
+        self.client.force_login(regular_member)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.client.force_login(self.admin_user)
+        response = self.client.get(self.url)
+        self.assertContains(response, "待审核注册")
+        self.assertContains(response, "全部用户")
+        self.assertContains(response, "pending-review")
+        self.assertContains(response, "stock/admin_users.css")
+        self.assertNotContains(response, "仓库与订单")
+        self.assertEqual(self.client.get("/admin/auth/user/").status_code, 404)
+        self.assertEqual(self.client.get("/admin/stock/warehouse/").status_code, 404)
+
+    def test_approve_and_disable_user_access(self):
+        self.client.force_login(self.admin_user)
+        response = self.client.post(self.url, {"action": "approve", "user_id": self.pending.pk})
+        self.assertRedirects(response, f"{self.url}#pending")
+        self.pending.refresh_from_db()
+        self.assertTrue(self.pending.is_staff)
+        self.assertEqual(self.client.get(self.url).context["pending_page"].paginator.count, 0)
+
+        self.client.post(self.url, {"action": "disable", "user_id": self.pending.pk})
+        self.pending.refresh_from_db()
+        self.assertFalse(self.pending.is_active)
+        self.client.logout()
+        self.assertContains(self.client.post(reverse("login"), {"username": "pending-review", "password": "operator-test-password"}), "账号已停用")
+        self.client.force_login(self.admin_user)
+        self.client.post(self.url, {"action": "enable", "user_id": self.pending.pk})
+        self.pending.refresh_from_db()
+        self.assertTrue(self.pending.is_active)
+
+    def test_reject_and_reopen_registration(self):
+        self.client.force_login(self.admin_user)
+        self.client.post(self.url, {"action": "reject", "user_id": self.pending.pk})
+        self.pending.refresh_from_db()
+        self.assertFalse(self.pending.is_active)
+        self.assertFalse(self.pending.is_staff)
+        self.assertContains(self.client.get(self.url), "已拒绝")
+        self.client.logout()
+        self.assertContains(self.client.post(reverse("login"), {"username": "pending-review", "password": "operator-test-password"}), "注册申请未通过")
+        self.client.force_login(self.admin_user)
+        self.client.post(self.url, {"action": "reopen", "user_id": self.pending.pk})
+        self.pending.refresh_from_db()
+        self.assertTrue(self.pending.is_active)
+        self.assertFalse(self.pending.is_staff)
+
+    def test_cannot_change_administrator_account(self):
+        self.client.force_login(self.admin_user)
+        self.client.post(self.url, {"action": "disable", "user_id": self.admin_user.pk})
+        self.admin_user.refresh_from_db()
+        self.assertTrue(self.admin_user.is_active)

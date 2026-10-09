@@ -1,0 +1,170 @@
+:root {
+  color-scheme: light;
+  --primary: #2877e8;
+  --secondary: #1c5eb9;
+  --accent: #eaf2ff;
+  --primary-fg: #fff;
+  --body-fg: #53657e;
+  --body-bg: #f4f7fb;
+  --body-quiet-color: #8190a3;
+  --header-color: #16263d;
+  --header-branding-color: #16263d;
+  --header-bg: #fff;
+  --header-link-color: #53657e;
+  --breadcrumbs-fg: #71829a;
+  --breadcrumbs-link-fg: #2668ce;
+  --breadcrumbs-bg: transparent;
+  --link-fg: #2668ce;
+  --link-hover-color: #1758ad;
+  --link-selected-fg: #1758ad;
+  --hairline-color: #e6ecf3;
+  --border-color: #dce5ef;
+  --darkened-bg: #f8fbff;
+  --selected-bg: #eaf2ff;
+  --selected-row: #f5f9ff;
+  --button-bg: #2877e8;
+  --button-hover-bg: #1769dc;
+  --default-button-bg: #2877e8;
+  --default-button-hover-bg: #1769dc;
+  --object-tools-bg: #2877e8;
+  --object-tools-hover-bg: #1769dc;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body { background: #f4f7fb; color: #53657e; font-family: inherit; font-size: 14px; }
+#container { min-height: 100vh; background: transparent; }
+#header {
+  min-height: 72px;
+  padding: 0 max(32px, calc((100vw - 1440px) / 2));
+  background: #fff;
+  border-bottom: 1px solid #e5ebf2;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+#branding { float: none; display: flex; align-items: center; min-width: 0; }
+.stock-admin-brand { display: inline-flex; align-items: center; gap: 10px; color: #152842 !important; text-decoration: none !important; white-space: nowrap; }
+.stock-admin-brand img { width: 34px; height: 34px; border-radius: 10px; }
+.stock-admin-brand span { font-size: 20px; font-weight: 650; letter-spacing: -.025em; }
+.stock-admin-brand b { color: #2877e8; }
+.stock-admin-brand small { margin-left: 8px; padding-left: 17px; border-left: 1px solid #dfe7f1; color: #8190a3; font-size: 12px; font-weight: 600; }
+#user-tools { float: none; display: flex; align-items: center; gap: 20px; margin: 0; padding: 0; font-size: 13px; text-transform: none; letter-spacing: 0; }
+#user-tools a, #user-tools button { color: #60718a; font-size: 13px; font-weight: 600; text-decoration: none; }
+#user-tools a:hover, #user-tools button:hover { color: #2668ce; }
+#logout-form { display: inline-flex; margin: 0; }
+#logout-form button { padding: 0; border: 0; background: transparent; cursor: pointer; }
+nav[aria-label="Breadcrumbs"] { padding: 0 max(32px, calc((100vw - 1440px) / 2)); background: transparent; }
+nav[aria-label="Breadcrumbs"] .breadcrumbs { max-width: 1440px; margin: 0 auto; padding: 17px 0 0; color: #8b9aaf; background: transparent; font-size: 12px; }
+nav[aria-label="Breadcrumbs"] a { color: #5382c9; }
+.main { width: 100%; max-width: 1440px; margin: 0 auto; min-width: 0; }
+.main > .content { width: 100%; min-width: 0; padding: 32px; }
+#content { width: 100%; padding: 0; }
+.dashboard #content { width: 100%; }
+.dashboard .colMS { margin-right: 0; }
+#content .titles-and-tools { margin-bottom: 23px; align-items: center; }
+#content h1 { margin: 0; color: #16263d; font-size: 28px; font-weight: 700; letter-spacing: -.025em; line-height: 1.35; }
+#content h2 { color: #203753; }
+#content h3 { color: #263a55; }
+.object-tools { float: none; margin: 0; }
+.object-tools a, .object-tools a:link, .object-tools a:visited { padding: 9px 15px; background: #2877e8; border-radius: 9px; font-size: 13px; font-weight: 650; }
+.object-tools a:hover { background: #1769dc; }
+.messagelist { margin: 0 0 18px; padding: 0; }
+.messagelist li { border: 1px solid #ccebdc; border-radius: 9px; background: #edfaf3; color: #1d8760; padding: 12px 15px; }
+.messagelist li.error { border-color: #f8d4d0; background: #fff3f1; color: #bb4e46; }
+
+.stock-admin-eyebrow { color: #5382c9; font-size: 11px; font-weight: 750; letter-spacing: .13em; }
+.stock-admin-home-head { margin-bottom: 23px; }
+.stock-admin-home-head h1 { margin-top: 8px !important; }
+.stock-admin-home-head p { margin: 9px 0 0; color: #8190a3; }
+.stock-admin-review-panel { display: flex; align-items: center; gap: 18px; max-width: 900px; padding: 26px; background: #fff; border: 1px solid #e6ecf3; border-radius: 16px; box-shadow: 0 5px 22px rgba(26, 61, 103, .035); }
+.stock-admin-review-icon { display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px; border-radius: 12px; background: #eaf2ff; color: #2877e8; font-size: 22px; font-weight: 700; }
+.stock-admin-review-panel h2 { margin: 0 0 5px; font-size: 17px; }
+.stock-admin-review-panel p { margin: 0; color: #8190a3; }
+.stock-admin-review-panel a { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 40px; margin-left: auto; padding: 0 17px; border-radius: 9px; background: #2877e8; color: #fff; font-size: 13px; font-weight: 650; text-decoration: none; white-space: nowrap; }
+.stock-admin-review-panel a:hover { background: #1769dc; color: #fff; }
+
+body.stock-admin-login { padding: 0; background: #f4f7fb; }
+body.stock-admin-login #container { width: 100%; max-width: none; min-width: 0; margin: 0; border: 0; border-radius: 0; overflow: visible; background: transparent; }
+body.stock-admin-login .main { display: block; }
+body.stock-admin-login .main > .content { display: flex; justify-content: center; align-items: flex-start; padding-top: min(11vh, 90px); }
+body.stock-admin-login #content { width: 100%; max-width: 410px; }
+.stock-admin-login-card { padding: 33px; background: #fff; border: 1px solid #e6ecf3; border-radius: 16px; box-shadow: 0 5px 22px rgba(26, 61, 103, .035); }
+.stock-admin-login-card h1 { margin: 8px 0 0 !important; }
+.stock-admin-login-card > p { margin: 8px 0 25px; color: #8190a3; line-height: 1.5; }
+.stock-admin-login-card form { display: flex; flex-direction: column; gap: 7px; }
+.stock-admin-login-card label { color: #5c708b; font-size: 12px; font-weight: 650; }
+.stock-admin-login-card input[type="text"], .stock-admin-login-card input[type="password"] { width: 100%; height: 42px; margin-bottom: 11px; padding: 0 12px; border: 1px solid #dce5ef; border-radius: 8px; background: #fff; color: #213650; font-size: 14px; }
+.stock-admin-login-card input:focus { border-color: #2877e8; box-shadow: 0 0 0 3px #e5f0ff; outline: none; }
+.stock-admin-login-card button { width: 100%; min-height: 40px; margin-top: 4px; border: 0; border-radius: 9px; background: #2877e8; color: #fff; font-size: 13px; font-weight: 650; cursor: pointer; }
+.stock-admin-login-card button:hover { background: #1769dc; }
+.stock-admin-login-footer { margin-top: 24px; padding-top: 18px; border-top: 1px solid #edf1f5; text-align: center; font-size: 13px; }
+.stock-admin-error { margin-bottom: 17px; padding: 11px 14px; border: 1px solid #f8d4d0; border-radius: 8px; background: #fff3f1; color: #bb4e46; line-height: 1.5; }
+.stock-admin-error ul { margin: 0; padding-left: 18px; }
+
+#changelist, .change-form #content-main, .delete-confirmation #content-main, .change-password #content-main { min-width: 0; }
+#changelist { padding: 20px 22px; background: #fff; border: 1px solid #e6ecf3; border-radius: 16px; box-shadow: 0 5px 22px rgba(26, 61, 103, .035); }
+#changelist #toolbar { margin: 0 0 17px; padding: 0; border: 0; background: transparent; }
+#changelist #toolbar form > div { display: flex; gap: 9px; align-items: center; }
+#changelist #toolbar label { display: flex; align-items: center; }
+#changelist #toolbar input[type="text"] { width: min(320px, 100%); height: 39px; border: 1px solid #dce5ef; border-radius: 8px; background: #fff; padding: 0 11px; }
+#changelist #toolbar input[type="submit"] { height: 39px; padding: 0 18px; border: 1px solid #2877e8; border-radius: 8px; background: #2877e8; color: #fff; font-weight: 650; }
+#changelist .actions { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; padding: 0; background: transparent; }
+#changelist .actions label { display: flex; align-items: center; gap: 9px; }
+#changelist .actions select { min-height: 38px; border: 1px solid #dce5ef; border-radius: 8px; background: #fff; }
+#changelist .actions button { min-height: 38px; padding: 0 16px; border: 1px solid #dce5ef; border-radius: 8px; background: #f8fbff; color: #2877e8; font-weight: 650; }
+#changelist .actions .action-counter { color: #8b9aaf; }
+#changelist .results { overflow-x: auto; }
+#result_list { width: 100%; border: 1px solid #edf1f5; border-radius: 10px; overflow: hidden; }
+#result_list thead th { padding: 13px 12px; background: #f8fbff; border-bottom: 1px solid #e7edf4; color: #71849c; font-size: 12px; font-weight: 650; }
+#result_list tbody th, #result_list tbody td { padding: 13px 12px; border-bottom: 1px solid #edf1f5; color: #53657e; }
+#result_list tbody tr:hover { background: #f8fbff; }
+#result_list a { font-weight: 650; }
+#changelist-filter { padding: 0 0 14px; border: 1px solid #e6ecf3; border-radius: 10px; background: #f8fbff; overflow: hidden; }
+#changelist-filter h2 { margin: 0; padding: 13px 15px; background: #edf5ff; color: #4975ad; font-size: 13px; }
+#changelist-filter #changelist-filter-extra-actions { padding: 11px 14px; }
+#changelist-filter #changelist-filter-extra-actions h3 { margin: 0; padding: 0; font-size: 12px; }
+#changelist-filter details { padding: 12px 14px; border-top: 1px solid #e6ecf3; }
+#changelist-filter details summary { margin: 0 0 10px; padding: 0; color: #53657e; font-weight: 650; }
+#changelist-filter details summary::before { margin-right: 5px; }
+#changelist-filter ul { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; border: 0; }
+#changelist-filter li, #changelist-filter li.selected { margin: 0; padding: 0; border: 0; }
+#changelist-filter li a { padding: 5px 10px; border-radius: 6px; color: #71849c; text-decoration: none; }
+#changelist-filter li.selected a { background: #e8f1ff; color: #2668ce; font-weight: 650; }
+#changelist .paginator { border-top: 1px solid #edf1f5; padding-top: 14px; color: #8b9aaf; }
+.stock-admin-status { display: inline-flex; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 650; }
+.stock-admin-status.approved { color: #188064; background: #e8f8f1; }
+.stock-admin-status.pending { color: #b57216; background: #fff4df; }
+
+fieldset.module, .inline-group, .submit-row, .delete-confirmation form { margin: 0 0 18px; background: #fff; border: 1px solid #e6ecf3; border-radius: 14px; box-shadow: 0 5px 22px rgba(26, 61, 103, .035); overflow: hidden; }
+fieldset.module h2, .inline-group h2 { margin: 0; padding: 14px 18px; background: #f8fbff; color: #4975ad; font-size: 14px; }
+fieldset.module .form-row { padding: 14px 18px; border-bottom: 1px solid #edf1f5; }
+fieldset.module .form-row:last-child { border-bottom: 0; }
+fieldset.module label { color: #53657e; font-weight: 600; }
+input[type="text"], input[type="password"], input[type="email"], input[type="number"], select, textarea { max-width: 100%; border: 1px solid #dce5ef; border-radius: 8px; background: #fff; color: #213650; }
+input[type="text"]:focus, input[type="password"]:focus, input[type="email"]:focus, input[type="number"]:focus, select:focus, textarea:focus { border-color: #2877e8; box-shadow: 0 0 0 3px #e5f0ff; outline: none; }
+.submit-row { display: flex; gap: 10px; align-items: center; padding: 14px 18px; }
+.submit-row input, .submit-row a.closelink, input[type="submit"], button[type="submit"] { border-radius: 8px; }
+.submit-row .deletelink { color: #c64f4a; }
+.help, .helptext { color: #8b9aaf; }
+
+@media (max-width: 900px) {
+  #header { padding: 0 20px; }
+  nav[aria-label="Breadcrumbs"] { padding: 0 20px; }
+  .main > .content { padding: 24px 20px; }
+  .stock-admin-review-panel { max-width: none; }
+}
+@media (max-width: 620px) {
+  #header { min-height: 65px; flex-wrap: wrap; padding: 12px 16px; gap: 9px; }
+  .stock-admin-brand small { display: none; }
+  #user-tools { width: 100%; gap: 15px; flex-wrap: wrap; }
+  nav[aria-label="Breadcrumbs"] { padding: 0 16px; }
+  .main > .content { padding: 22px 15px; }
+  #content h1 { font-size: 23px; }
+  .stock-admin-review-panel { align-items: flex-start; flex-wrap: wrap; padding: 19px; }
+  .stock-admin-review-panel a { width: 100%; margin-left: 0; }
+  #changelist { padding: 17px; }
+  .stock-admin-login-card { padding: 25px; }
+}

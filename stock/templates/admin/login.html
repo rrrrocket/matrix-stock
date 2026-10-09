@@ -1,0 +1,26 @@
+{% extends "admin/base_site.html" %}
+
+{% block bodyclass %}{{ block.super }} stock-admin-login{% endblock %}
+{% block usertools %}{% endblock %}
+{% block nav-breadcrumbs %}{% endblock %}
+{% block nav-sidebar %}{% endblock %}
+{% block content_title %}{% endblock %}
+
+{% block content %}
+<section class="stock-admin-login-card">
+  <div class="stock-admin-eyebrow">INVENTORY CONTROL</div>
+  <h1>管理员登录</h1>
+  <p>审核新注册账号，管理库存系统用户。</p>
+  {% if form.non_field_errors %}<div class="stock-admin-error" role="alert">{{ form.non_field_errors }}</div>{% elif form.errors %}<div class="stock-admin-error" role="alert">请检查用户名和密码。</div>{% endif %}
+  {% if user.is_authenticated %}<div class="stock-admin-error" role="alert">当前账号没有后台管理权限，请使用管理员账号登录。</div>{% endif %}
+  <form action="{{ app_path }}" method="post" id="login-form">{% csrf_token %}
+    <label for="{{ form.username.id_for_label }}">用户名</label>
+    {{ form.username }}
+    <label for="{{ form.password.id_for_label }}">密码</label>
+    {{ form.password }}
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit">登录后台</button>
+  </form>
+  <div class="stock-admin-login-footer"><a href="{% url 'login' %}">返回库存系统登录</a></div>
+</section>
+{% endblock %}

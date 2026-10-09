@@ -1,0 +1,88 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>用户管理 · Matrix Stock</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'stock/favicon.svg' %}">
+  <link rel="stylesheet" href="{% static 'stock/app.css' %}">
+  <link rel="stylesheet" href="{% static 'stock/admin_users.css' %}">
+  <script defer src="{% static 'stock/admin_users.js' %}"></script>
+</head>
+<body class="admin-workbench-body">
+  <header class="admin-topbar">
+    <div class="admin-topbar-inner">
+      <a class="admin-brand" href="{% url 'stock_admin_users' %}"><img src="{% static 'stock/favicon.svg' %}" alt=""><span>Matrix <b>Stock</b></span><small>管理中心</small></a>
+      <nav class="admin-nav" aria-label="管理中心导航"><a href="{% url 'stock_admin_users' %}" aria-current="page">用户管理</a></nav>
+      <div class="admin-account">
+        <span class="admin-avatar" aria-hidden="true">{{ request.user.username|slice:':1'|upper }}</span>
+        <span class="admin-account-name">{{ request.user.username }}</span>
+        <form method="post" action="{% url 'admin:logout' %}">{% csrf_token %}<button type="submit">退出登录</button></form>
+      </div>
+    </div>
+  </header>
+
+  <main class="admin-workbench">
+    {% if messages %}<div class="admin-messages" role="status">{% for message in messages %}<div class="admin-message {% if message.tags == 'error' %}admin-message-error{% endif %}">{{ message }}</div>{% endfor %}</div>{% endif %}
+    <section class="admin-page-header">
+      <div><div class="admin-eyebrow">User Administration</div><h1>用户管理</h1></div>
+      <a class="admin-refresh" href="{{ request.get_full_path }}">刷新</a>
+    </section>
+
+    <section class="admin-panel" id="pending" aria-labelledby="pending-title">
+      <div class="admin-panel-heading"><h2 id="pending-title">待审核注册</h2><span class="admin-count">{{ pending_total }}</span></div>
+      <form class="admin-search" method="get" action="{% url 'stock_admin_users' %}#pending">
+        <input type="search" name="pending_q" value="{{ pending_search }}" placeholder="搜索用户名或邮箱" aria-label="搜索待审核注册">
+        {% if users_search %}<input type="hidden" name="users_q" value="{{ users_search }}">{% endif %}
+        <button type="submit">搜索</button>
+      </form>
+      <div class="admin-table-wrap"><table class="admin-table">
+        <thead><tr><th>用户名</th><th>邮箱</th><th>注册时间</th><th class="admin-actions-column">操作</th></tr></thead>
+        <tbody>
+          {% for member in pending_page %}
+          <tr><td><strong>{{ member.username }}</strong></td><td>{{ member.email|default:'—' }}</td><td>{{ member.date_joined|date:'Y-m-d H:i' }}</td><td class="admin-row-actions"><button type="button" data-admin-action="approve" data-user-id="{{ member.pk }}" data-username="{{ member.username }}">通过</button><button type="button" class="admin-danger-text" data-admin-action="reject" data-user-id="{{ member.pk }}" data-username="{{ member.username }}">拒绝</button></td></tr>
+          {% empty %}
+          <tr><td colspan="4" class="admin-empty">{% if pending_search %}没有符合搜索条件的待审核账号{% else %}暂无待审核注册{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+      <div class="admin-pagination"><span>共 {{ pending_page.paginator.count }} 条</span><div>{% if pending_page.has_previous %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.previous_page_number }}&users_page={{ users_page.number }}#pending" aria-label="待审核上一页">‹</a>{% endif %}<span>{{ pending_page.number }} / {{ pending_page.paginator.num_pages }}</span>{% if pending_page.has_next %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.next_page_number }}&users_page={{ users_page.number }}#pending" aria-label="待审核下一页">›</a>{% endif %}</div></div>
+    </section>
+
+    <section class="admin-panel" id="users" aria-labelledby="users-title">
+      <div class="admin-panel-heading"><h2 id="users-title">全部用户</h2><span class="admin-count">{{ users_page.paginator.count }}</span></div>
+      <form class="admin-search" method="get" action="{% url 'stock_admin_users' %}#users">
+        <input type="search" name="users_q" value="{{ users_search }}" placeholder="搜索用户名或邮箱" aria-label="搜索全部用户">
+        {% if pending_search %}<input type="hidden" name="pending_q" value="{{ pending_search }}">{% endif %}
+        <button type="submit">搜索</button>
+      </form>
+      <div class="admin-table-wrap"><table class="admin-table">
+        <thead><tr><th>用户名</th><th>邮箱</th><th>审核状态</th><th>权限</th><th>注册时间</th><th class="admin-actions-column">操作</th></tr></thead>
+        <tbody>
+          {% for member in users_page %}
+          <tr>
+            <td><strong>{{ member.username }}</strong></td><td>{{ member.email|default:'—' }}</td>
+            <td>{% if member.is_staff and member.is_active %}<span class="admin-status success">已通过</span>{% elif member.is_staff %}<span class="admin-status muted">已停用</span>{% elif member.is_active %}<span class="admin-status pending">待审核</span>{% else %}<span class="admin-status rejected">已拒绝</span>{% endif %}</td>
+            <td>{% if member.is_superuser %}管理员{% elif member.is_staff %}普通用户{% else %}无权限{% endif %}</td>
+            <td>{{ member.date_joined|date:'Y-m-d H:i' }}</td>
+            <td class="admin-row-actions">{% if member.is_superuser %}—{% elif member.is_staff and member.is_active %}<button type="button" data-admin-action="disable" data-user-id="{{ member.pk }}" data-username="{{ member.username }}">停用</button>{% elif member.is_staff %}<button type="button" data-admin-action="enable" data-user-id="{{ member.pk }}" data-username="{{ member.username }}">启用</button>{% elif not member.is_active %}<button type="button" data-admin-action="reopen" data-user-id="{{ member.pk }}" data-username="{{ member.username }}">恢复审核</button>{% else %}<span class="admin-muted">等待审核</span>{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="6" class="admin-empty">{% if users_search %}没有符合搜索条件的用户{% else %}暂无其他用户{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+      <div class="admin-pagination"><span>共 {{ users_page.paginator.count }} 条</span><div>{% if users_page.has_previous %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.number }}&users_page={{ users_page.previous_page_number }}#users" aria-label="用户上一页">‹</a>{% endif %}<span>{{ users_page.number }} / {{ users_page.paginator.num_pages }}</span>{% if users_page.has_next %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.number }}&users_page={{ users_page.next_page_number }}#users" aria-label="用户下一页">›</a>{% endif %}</div></div>
+    </section>
+  </main>
+
+  <dialog class="admin-confirm" id="admin-confirm" aria-labelledby="admin-confirm-title">
+    <form method="post" action="{% url 'stock_admin_users' %}">{% csrf_token %}<input type="hidden" name="action" id="admin-confirm-action"><input type="hidden" name="user_id" id="admin-confirm-user-id">
+      <div class="admin-confirm-head"><div class="admin-confirm-icon">✓</div><h2 id="admin-confirm-title">确认操作</h2><button type="button" class="admin-confirm-close" data-close-dialog aria-label="关闭">×</button></div>
+      <p id="admin-confirm-description"></p>
+      <div class="admin-confirm-actions"><button type="button" class="admin-cancel" data-close-dialog>取消</button><button type="submit" class="admin-confirm-submit" id="admin-confirm-submit">确认</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
