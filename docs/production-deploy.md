@@ -34,11 +34,9 @@ ERP 生产环境还需设置：`STOCK_SERVICE_URL=https://stock.matrix-one.tech`
 ```bash
 cd /home/ubuntu/matrix-stock
 ./start.sh
-docker compose --env-file .env.production -f compose.production.yml ps
-docker compose --env-file .env.production -f compose.production.yml logs --tail=50 web
 ```
 
-`./start.sh` 在生产服务器启动 PostgreSQL、Web 和重试进程，自动执行迁移与管理员同步，并把 NPM 容器接入 `matrix-stock-edge` 网络。本机测试使用 `./start.sh test`，测试重试进程使用 `./start.sh test worker`。数据库使用 Docker 卷 `matrix-stock_stock_db`，重新构建容器不会删除数据。**不要运行 `docker compose down -v`。**
+`./start.sh` 在生产服务器启动 PostgreSQL、Web 和重试进程，自动执行迁移与管理员同步、连接 NPM 网络，并在结束时显示容器状态。只需执行这一个启动命令。本机测试使用 `./start.sh test`，测试重试进程使用 `./start.sh test worker`。数据库使用 Docker 卷 `matrix-stock_stock_db`，重新构建容器不会删除数据。**不要运行 `docker compose down -v`。**
 
 ## 4. 在 NPM 配置域名和 HTTPS
 
@@ -66,13 +64,6 @@ docker exec <NPM容器名> getent hosts matrix-stock-web
 
 ## 5. 验收
 
-在服务器运行：
-
-```bash
-cd /home/ubuntu/matrix-stock
-docker compose --env-file .env.production -f compose.production.yml ps
-curl -I https://stock.matrix-one.tech/login/
-curl https://stock.matrix-one.tech/api/health/
-```
+打开 `https://stock.matrix-one.tech/login/`，再访问 `https://stock.matrix-one.tech/api/health/`，确认页面和接口都正常。若启动或访问失败，再在服务器运行 `docker compose --env-file .env.production -f compose.production.yml logs --tail=50 web` 查看错误。
 
 生产数据库从空库开始，不导入本机仓库或订单。验收时确认登录页为 HTTPS、静态样式正常、管理员可登录；在 ERP 登录生产 Stock 并重新绑定账号。之后用测试订单验证 ERP 订单同步、Stock 出库、国内快递单号回填。不要用真实订单做首次联调。

@@ -29,6 +29,7 @@ case "$mode" in
     else
       echo "Stock 已启动；未自动找到 Nginx Proxy Manager。请执行 NPM_CONTAINER=<容器名> ./start.sh 连接网络。" >&2
     fi
+    docker compose --env-file .env.production -f compose.production.yml ps
     echo "在 NPM 中将 stock.matrix-one.tech 转发到 http://matrix-stock-web:8020，并申请 HTTPS 证书。"
     ;;
   test|local|worker)
