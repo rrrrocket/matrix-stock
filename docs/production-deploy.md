@@ -23,7 +23,7 @@ ssh ubuntu@stock.matrix-one.tech 'chmod 600 /home/ubuntu/matrix-stock/.env.produ
 
 Stock 生产配置已将 `STOCK_ERP_CALLBACK_URL` 设为 `https://erp.matrix-one.tech/api/orders/stock-outbound`，`STOCK_ERP_RETURN_ORIGINS` 设为 `https://erp.matrix-one.tech`。需要登录密码时，在本机查看 `.env.production` 的 `STOCK_ADMIN_PASSWORD`；不要把它发到聊天或提交到 Git。
 
-ERP 生产环境还需设置：`STOCK_SERVICE_URL=https://stock.matrix-one.tech`、`STOCK_SERVICE_PUBLIC_URL=https://stock.matrix-one.tech`，以及与 Stock `.env.production` 的 `STOCK_ERP_API_KEY` 完全一致的 `STOCK_SERVICE_API_KEY`。无需填写 ERP 主账号 ID；ERP 用户在「店铺授权 → 库存系统授权」登录并绑定已审核的 Stock 账号后，才会推送其已映射的订单。ERP 和 Stock 两端代码都要更新后再启用订单推送，并按各自的 `./start.sh` 部署流程重启。
+ERP 生产环境还需设置：`STOCK_SERVICE_URL=https://stock.matrix-one.tech`、`STOCK_SERVICE_PUBLIC_URL=https://stock.matrix-one.tech`，以及与 Stock `.env.production` 的 `STOCK_ERP_API_KEY` 完全一致的 `STOCK_SERVICE_API_KEY`。无需填写 ERP 主账号 ID；ERP 用户在「授权中心 → 库存系统授权」登录并绑定已审核的 Stock 账号后，才会推送其已映射的订单。ERP 和 Stock 两端代码都要更新后再启用订单推送，并按各自的 `./start.sh` 部署流程重启。
 
 部署前确认服务器端口 `8020` 未被占用。若已占用，在服务器的 `.env.production` 增加 `STOCK_HOST_PORT=其他端口`；NPM 的 Docker 上游仍是 `matrix-stock-web:8020`。
 
