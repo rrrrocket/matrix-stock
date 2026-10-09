@@ -1,0 +1,18 @@
+{% extends 'stock/base.html' %}
+{% block title %}注册 · Matrix Stock{% endblock %}
+{% block content %}
+<section class="login-card card">
+  <div class="eyebrow">库存管理系统</div>
+  <h1>申请注册</h1>
+  <p class="subtle">注册后由管理员审核，通过后即可登录。</p>
+  <form method="post" class="form-stack">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="flash flash-error">{{ form.non_field_errors }}</div>{% endif %}
+    <label>用户名<input name="username" value="{{ form.username.value|default:'' }}" autocomplete="username" maxlength="150" required autofocus>{% for error in form.username.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
+    <label>密码<input name="password1" type="password" autocomplete="new-password" required>{% for error in form.password1.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
+    <label>确认密码<input name="password2" type="password" autocomplete="new-password" required>{% for error in form.password2.errors %}<small class="field-error">{{ error }}</small>{% endfor %}</label>
+    <button class="button primary full" type="submit">提交注册申请</button>
+  </form>
+  <div class="auth-footer">已有账号？<a href="{% url 'login' %}">返回登录</a></div>
+</section>
+{% endblock %}

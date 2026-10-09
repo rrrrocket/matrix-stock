@@ -1,0 +1,65 @@
+name: matrix-stock
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${STOCK_DB_NAME:?Set STOCK_DB_NAME}
+      POSTGRES_USER: ${STOCK_DB_USER:?Set STOCK_DB_USER}
+      POSTGRES_PASSWORD: ${STOCK_DB_PASSWORD:?Set STOCK_DB_PASSWORD}
+    volumes:
+      - stock_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: ${STOCK_ENV_FILE:-.env.production}
+    environment:
+      STOCK_DB_HOST: db
+      STOCK_DB_PORT: "5432"
+    ports:
+      - "127.0.0.1:${STOCK_HOST_PORT:-8020}:8020"
+    networks:
+      default: {}
+      stock-edge:
+        aliases:
+          - matrix-stock-web
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8020/api/health/', headers={'X-Forwarded-Proto':'https'}), timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    command: >-
+      sh -c "python manage.py migrate --noinput &&
+      python manage.py sync_admin &&
+      exec gunicorn config.wsgi:application --bind 0.0.0.0:8020
+      --workers 2 --threads 4 --access-logfile - --error-logfile -"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: ${STOCK_ENV_FILE:-.env.production}
+    environment:
+      STOCK_DB_HOST: db
+      STOCK_DB_PORT: "5432"
+    depends_on:
+      web:
+        condition: service_healthy
+    command: python manage.py dispatch_alerts
+
+volumes:
+  stock_db:
+
+networks:
+  stock-edge:
+    name: matrix-stock-edge

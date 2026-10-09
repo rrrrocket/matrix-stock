@@ -91,9 +91,12 @@ def adjust_stock(*, warehouse_id, sku, new_quantity, note, operator=None):
 
 
 @transaction.atomic
-def record_outbound(*, line_id, warehouse_id, quantity, operator, operation_id):
+def record_outbound(*, line_id, warehouse_id, quantity, tracking_number, operator, operation_id):
     warehouse_id = _positive_int(warehouse_id, "仓库ID")
     quantity = _positive_int(quantity, "出库数量")
+    tracking_number = str(tracking_number or "").strip()
+    if not tracking_number or len(tracking_number) > 200 or any(ord(char) < 32 for char in tracking_number):
+        raise StockError("请填写有效的国内快递单号（最多200字符）")
     try:
         operation_id = UUID(str(operation_id))
     except (TypeError, ValueError, AttributeError):
@@ -105,6 +108,7 @@ def record_outbound(*, line_id, warehouse_id, quantity, operator, operation_id):
             or previous.order_line_id != line_id
             or str(previous.warehouse_id) != str(warehouse_id)
             or previous.quantity_change != -quantity
+            or previous.tracking_number != tracking_number
         ):
             raise StockError("操作编号已用于其他业务")
         return previous
@@ -134,6 +138,7 @@ def record_outbound(*, line_id, warehouse_id, quantity, operator, operation_id):
     balance.refresh_from_db()
     return StockMovement.objects.create(
         operation_id=operation_id, warehouse=warehouse, item=item, order_line=line,
+        tracking_number=tracking_number,
         movement_type=StockMovement.Type.OUTBOUND, quantity_change=-quantity,
         before_quantity=balance.on_hand + quantity, after_quantity=balance.on_hand,
         note=f"{line.order.platform} / {line.order.store_name} / {line.order.external_order_id}",

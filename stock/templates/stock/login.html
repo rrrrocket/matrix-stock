@@ -2,15 +2,17 @@
 {% block title %}登录 · Matrix Stock{% endblock %}
 {% block content %}
 <section class="login-card card">
-  <div class="eyebrow">独立自有仓库存系统</div>
+  <div class="eyebrow">库存管理系统</div>
   <h1>欢迎回来</h1>
   <p class="subtle">登录后处理入库、订单和多仓出库。</p>
-  {% if form.errors %}<div class="flash flash-error">用户名或密码不正确。</div>{% endif %}
+  {% if form.non_field_errors %}<div class="flash flash-error">{% for error in form.non_field_errors %}{{ error }}{% endfor %}</div>{% endif %}
   <form method="post" class="form-stack">
     {% csrf_token %}
-    <label>用户名<input name="username" autocomplete="username" required autofocus></label>
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>用户名<input name="username" value="{{ form.username.value|default:'' }}" autocomplete="username" required autofocus></label>
     <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
     <button class="button primary full" type="submit">登录</button>
   </form>
+  <div class="auth-footer">还没有账号？<a href="{% url 'register' %}">申请注册</a></div>
 </section>
 {% endblock %}

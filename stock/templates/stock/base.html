@@ -5,12 +5,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Matrix Stock{% endblock %}</title>
-  <link rel="stylesheet" href="{% static 'stock/app.css' %}">
+  <link rel="icon" type="image/svg+xml" href="{% static 'stock/favicon.svg' %}">
+  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261010-2">
   <script defer src="{% static 'stock/app.js' %}"></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="{% url 'dashboard' %}"><span class="brand-mark">M</span><span>Matrix <b>Stock</b></span></a>
+    <a class="brand" href="{% url 'dashboard' %}"><img class="brand-mark" src="{% static 'stock/favicon.svg' %}" alt=""><span>Matrix <b>Stock</b></span></a>
     {% if user.is_authenticated %}
     <nav class="nav" aria-label="主导航">
       <a class="{% if active_nav == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">概览</a>

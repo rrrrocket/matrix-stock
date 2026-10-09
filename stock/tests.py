@@ -5,7 +5,7 @@ import os
 import uuid
 from io import BytesIO
 from urllib.parse import parse_qs, urlsplit
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -16,6 +16,7 @@ from openpyxl import Workbook
 from .models import ExternalOrder, OrderAlert, OrderLine, StockBalance, StockItem, StockMovement, Warehouse
 from .notifications import dispatch_pending_alerts
 from .services import StockError, import_opening_stock, record_inbound, record_outbound, upsert_external_order
+from .erp_callback import send_outbound_callback
 
 
 class StockFlowTests(TestCase):
@@ -78,24 +79,46 @@ class StockFlowTests(TestCase):
         self.assertTrue(created)
         line = order.lines.get()
         first_id = uuid.uuid4()
-        first = record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=3, operator=self.user, operation_id=first_id)
-        duplicate = record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=3, operator=self.user, operation_id=first_id)
+        first = record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=3, tracking_number='YT123', operator=self.user, operation_id=first_id)
+        duplicate = record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=3, tracking_number='YT123', operator=self.user, operation_id=first_id)
         self.assertEqual(first.id, duplicate.id)
         with self.assertRaises(StockError):
-            record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=1, operator=self.user, operation_id=first_id)
-        record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=2, operator=self.user, operation_id=uuid.uuid4())
+            record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=1, tracking_number='YT123', operator=self.user, operation_id=first_id)
+        record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=2, tracking_number='YT124', operator=self.user, operation_id=uuid.uuid4())
         line.refresh_from_db()
         self.assertEqual(line.remaining_quantity, 0)
         self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 0)
         self.assertEqual(StockBalance.objects.get(warehouse=self.b, item__sku="SKU-1").on_hand, 2)
         self.assertEqual(StockMovement.objects.filter(movement_type=StockMovement.Type.OUTBOUND).count(), 2)
         with self.assertRaises(StockError):
-            record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=1, operator=self.user, operation_id=uuid.uuid4())
+            record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=1, tracking_number='YT125', operator=self.user, operation_id=uuid.uuid4())
+
+    def test_outbound_requires_real_tracking_and_retries_erp_callback(self):
+        order, _ = upsert_external_order(self.payload)
+        line = order.lines.get()
+        with self.assertRaises(StockError):
+            record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=1, tracking_number='', operator=self.user, operation_id=uuid.uuid4())
+        movement = record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=1, tracking_number='YT123', operator=self.user, operation_id=uuid.uuid4())
+        with patch.dict(os.environ, {'STOCK_ERP_CALLBACK_URL': 'http://erp.test/api/orders/stock-outbound', 'STOCK_ERP_API_KEY': 'test-key'}):
+            with patch('stock.erp_callback.request.urlopen', side_effect=OSError('offline')):
+                self.assertFalse(send_outbound_callback(movement.id))
+            movement.refresh_from_db()
+            self.assertIsNone(movement.erp_callback_sent_at)
+            self.assertEqual(movement.erp_callback_attempts, 1)
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            with patch('stock.erp_callback.request.urlopen', return_value=response) as outgoing:
+                self.assertTrue(send_outbound_callback(movement.id))
+                payload = json.loads(outgoing.call_args.args[0].data)
+                self.assertEqual(payload['tracking_number'], 'YT123')
+                self.assertEqual(payload['operation_id'], str(movement.operation_id))
+            self.assertTrue(send_outbound_callback(movement.id))
+            self.assertEqual(outgoing.call_count, 1)
 
     def test_order_resync_does_not_reset_outbound_and_cancel_does_not_restore_stock(self):
         order, _ = upsert_external_order(self.payload)
         line = order.lines.get()
-        record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=2, operator=self.user, operation_id=uuid.uuid4())
+        record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=2, tracking_number='YT123', operator=self.user, operation_id=uuid.uuid4())
         _, created = upsert_external_order(self.payload)
         self.assertFalse(created)
         line.refresh_from_db()
@@ -103,14 +126,14 @@ class StockFlowTests(TestCase):
         self.payload["status"] = "cancelled"
         upsert_external_order(self.payload)
         with self.assertRaises(StockError):
-            record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=1, operator=self.user, operation_id=uuid.uuid4())
+            record_outbound(line_id=line.id, warehouse_id=self.b.id, quantity=1, tracking_number='YT124', operator=self.user, operation_id=uuid.uuid4())
         self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 1)
 
     def test_failed_outbound_rolls_back_all_changes(self):
         order, _ = upsert_external_order(self.payload)
         line = order.lines.get()
         with self.assertRaises(StockError):
-            record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=4, operator=self.user, operation_id=uuid.uuid4())
+            record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=4, tracking_number='YT123', operator=self.user, operation_id=uuid.uuid4())
         line.refresh_from_db()
         self.assertEqual(line.outbound_quantity, 0)
         self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 3)
@@ -136,7 +159,7 @@ class StockFlowTests(TestCase):
         self.payload["version"] = 1
         order, _ = upsert_external_order(self.payload)
         line = order.lines.get()
-        record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=2, operator=self.user, operation_id=uuid.uuid4())
+        record_outbound(line_id=line.id, warehouse_id=self.a.id, quantity=2, tracking_number='YT123', operator=self.user, operation_id=uuid.uuid4())
         self.payload["version"] = 2
         self.payload["status"] = "cancelled"
         upsert_external_order(self.payload)
@@ -204,3 +227,22 @@ class StockFlowTests(TestCase):
         self.assertEqual(self.client.get(reverse("inventory")).status_code, 200)
         self.assertEqual(self.client.get(reverse("orders")).status_code, 200)
         self.assertEqual(self.client.get(reverse("dashboard")).status_code, 200)
+
+    def test_registration_requires_staff_approval_before_login(self):
+        self.assertContains(self.client.get(reverse("login")), "申请注册")
+        response = self.client.post(reverse("register"), {
+            "username": "new-operator", "password1": "WarehousePass-2026!", "password2": "WarehousePass-2026!",
+        })
+        self.assertRedirects(response, reverse("login"))
+        registered = get_user_model().objects.get(username="new-operator")
+        self.assertFalse(registered.is_staff)
+        response = self.client.post(reverse("login"), {
+            "username": "new-operator", "password": "WarehousePass-2026!",
+        })
+        self.assertContains(response, "等待管理员审核")
+        registered.is_staff = True
+        registered.save(update_fields=["is_staff"])
+        response = self.client.post(reverse("login"), {
+            "username": "new-operator", "password": "WarehousePass-2026!",
+        })
+        self.assertRedirects(response, reverse("dashboard"))

@@ -22,7 +22,9 @@ from django.views.decorators.http import require_GET, require_POST
 from django.utils import timezone
 
 from .models import ErpLinkGrant, ExternalOrder, OrderLine, StockBalance, StockItem, StockMovement, Warehouse
+from .forms import StockRegistrationForm
 from .services import StockError, adjust_stock, import_opening_stock, record_inbound, record_outbound, upsert_external_order
+from .erp_callback import send_outbound_callback
 
 
 def staff_required(view):
@@ -34,6 +36,17 @@ def staff_required(view):
         return view(request, *args, **kwargs)
 
     return inner
+
+
+def register(request):
+    if request.user.is_authenticated and request.user.is_staff:
+        return redirect("dashboard")
+    form = StockRegistrationForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "注册申请已提交。请联系管理员审核账号，通过后即可登录。")
+        return redirect("login")
+    return render(request, "stock/register.html", {"form": form})
 
 
 def _inventory_rows(query="", warehouse_id=""):
@@ -127,6 +140,7 @@ def inbound(request):
             warehouse_id=request.POST.get("warehouse_id"),
             sku=request.POST.get("sku"),
             quantity=request.POST.get("quantity"),
+            tracking_number=request.POST.get("tracking_number"),
             product_name=request.POST.get("product_name"),
             note=request.POST.get("note"),
             operator=request.user,
@@ -195,7 +209,8 @@ def outbound(request, line_id):
             operation_id=request.POST.get("operation_id"),
             operator=request.user,
         )
-        messages.success(request, f"已从 {movement.warehouse.name} 出库 {-movement.quantity_change} 件")
+        synced = send_outbound_callback(movement.id)
+        messages.success(request, f"已从 {movement.warehouse.name} 出库 {-movement.quantity_change} 件；国内快递单号{'已回填 ERP' if synced else '待回填 ERP，将自动重试'}")
     except (StockError, Warehouse.DoesNotExist, OrderLine.DoesNotExist) as exc:
         messages.error(request, str(exc) if isinstance(exc, StockError) else "订单商品或仓库不存在")
     return redirect("orders")
