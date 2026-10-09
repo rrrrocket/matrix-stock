@@ -257,7 +257,9 @@ def erp_connect(request):
     if not key or not state or not return_url or len(state) > 1000 or len(return_url) > 500:
         return JsonResponse({"error": "绑定请求无效"}, status=400)
     parsed = urlsplit(return_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.fragment or parsed.path != "/inventory":
+    if (parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password
+            or parsed.path not in {"/inventory", "/stores"}
+            or (parsed.fragment and (parsed.path != "/stores" or parsed.fragment != "stock-authorization"))):
         return JsonResponse({"error": "返回地址无效"}, status=400)
     allowed_origins = {
         origin.strip().rstrip("/") for origin in
@@ -275,7 +277,7 @@ def erp_connect(request):
     )
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query.update({"stock_state": state, "stock_code": code})
-    return redirect(urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), "")))
+    return redirect(urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)))
 
 
 @csrf_exempt

@@ -74,6 +74,17 @@ class StockFlowTests(TestCase):
         self.assertEqual(first.json()["user_id"], self.user.pk)
         self.assertEqual(self.client.post(exchange_url, payload, content_type="application/json", HTTP_X_STOCK_KEY="test-key").status_code, 400)
 
+        settings_return_url = "http://localhost:3000/stores#stock-authorization"
+        settings_signature = hmac.new(b"test-key", f"{state}|{settings_return_url}".encode(), hashlib.sha256).hexdigest()
+        settings_redirect = self.client.get(connect_url, {
+            "state": state, "return_url": settings_return_url, "signature": settings_signature,
+        })
+        self.assertEqual(settings_redirect.status_code, 302)
+        settings_callback = urlsplit(settings_redirect["Location"])
+        self.assertEqual(settings_callback.path, "/stores")
+        self.assertEqual(settings_callback.fragment, "stock-authorization")
+        self.assertIn("stock_code", parse_qs(settings_callback.query))
+
     def test_multiple_warehouses_can_fulfill_one_order_without_double_deducting(self):
         order, created = upsert_external_order(self.payload)
         self.assertTrue(created)
