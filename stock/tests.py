@@ -32,6 +32,26 @@ class StockFlowTests(TestCase):
             "items": [{"sku": "SKU-1", "name": "测试商品", "quantity": 5}],
         }
 
+    def test_manual_inbound_form_adds_stock(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("inbound"), {
+            "warehouse_id": self.a.id,
+            "sku": "SKU-NEW-INBOUND",
+            "product_name": "测试入库商品",
+            "quantity": "2",
+            "note": "人工入库测试",
+        })
+        self.assertRedirects(response, reverse("inventory"))
+        self.assertEqual(
+            StockBalance.objects.get(warehouse=self.a, item__sku="SKU-NEW-INBOUND").on_hand,
+            2,
+        )
+        self.assertTrue(StockMovement.objects.filter(
+            warehouse=self.a, item__sku="SKU-NEW-INBOUND",
+            movement_type=StockMovement.Type.INBOUND,
+            quantity_change=2,
+        ).exists())
+
     @patch.dict(os.environ, {"STOCK_ERP_API_KEY": "test-key"})
     def test_catalog_api_requires_key_and_lists_zero_stock_items(self):
         StockItem.objects.create(sku="ZERO-1", name="无库存商品")

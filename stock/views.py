@@ -140,7 +140,6 @@ def inbound(request):
             warehouse_id=request.POST.get("warehouse_id"),
             sku=request.POST.get("sku"),
             quantity=request.POST.get("quantity"),
-            tracking_number=request.POST.get("tracking_number"),
             product_name=request.POST.get("product_name"),
             note=request.POST.get("note"),
             operator=request.user,
