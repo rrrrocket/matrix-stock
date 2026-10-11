@@ -41,8 +41,8 @@ def record_inbound(*, warehouse_id, sku, quantity, product_name="", note="", ope
     warehouse_id = _positive_int(warehouse_id, "仓库ID")
     quantity = _positive_int(quantity, "入库数量")
     sku = normalize_sku(sku)
-    warehouse = Warehouse.objects.get(pk=warehouse_id, is_active=True)
-    item, _ = StockItem.objects.get_or_create(sku=sku, defaults={"name": str(product_name or "").strip()[:255]})
+    warehouse = Warehouse.objects.get(pk=warehouse_id, owner=operator, is_active=True)
+    item, _ = StockItem.objects.get_or_create(owner=operator, sku=sku, defaults={"name": str(product_name or "").strip()[:255]})
     if product_name and not item.name:
         item.name = str(product_name).strip()[:255]
         item.save(update_fields=["name"])
@@ -55,7 +55,7 @@ def record_inbound(*, warehouse_id, sku, quantity, product_name="", note="", ope
         after_quantity=balance.on_hand, note=str(note or "")[:500], operator=operator,
     )
     for order_id in OrderLine.objects.filter(
-        sku=sku, is_present=True, is_skipped=False, order__status=ExternalOrder.Status.OPEN,
+        sku=sku, order__owner=operator, is_present=True, is_skipped=False, order__status=ExternalOrder.Status.OPEN,
     ).values_list("order_id", flat=True).distinct():
         sync_alert_for_order(ExternalOrder.objects.get(pk=order_id))
     return movement
@@ -75,8 +75,8 @@ def adjust_stock(*, warehouse_id, sku, new_quantity, note, operator=None):
         raise StockError("盘点数量必须是非负整数")
     if not str(note or "").strip():
         raise StockError("盘点调整必须填写原因")
-    warehouse = Warehouse.objects.get(pk=warehouse_id, is_active=True)
-    item = StockItem.objects.get(sku=normalize_sku(sku))
+    warehouse = Warehouse.objects.get(pk=warehouse_id, owner=operator, is_active=True)
+    item = StockItem.objects.get(owner=operator, sku=normalize_sku(sku))
     balance, _ = StockBalance.objects.select_for_update().get_or_create(warehouse=warehouse, item=item)
     before = balance.on_hand
     if before == new_quantity:
@@ -105,6 +105,7 @@ def record_outbound(*, line_id, warehouse_id, quantity, tracking_number, operato
     if previous:
         if (
             previous.movement_type != StockMovement.Type.OUTBOUND
+            or previous.order_line.order.owner_id != operator.pk
             or previous.order_line_id != line_id
             or str(previous.warehouse_id) != str(warehouse_id)
             or previous.quantity_change != -quantity
@@ -113,15 +114,15 @@ def record_outbound(*, line_id, warehouse_id, quantity, tracking_number, operato
             raise StockError("操作编号已用于其他业务")
         return previous
 
-    line = OrderLine.objects.select_for_update().select_related("order").get(pk=line_id)
+    line = OrderLine.objects.select_for_update().select_related("order").get(pk=line_id, order__owner=operator)
     if line.order.status != ExternalOrder.Status.OPEN or not line.is_present:
         raise StockError("订单已取消、结束或商品已不在订单中")
     if line.is_skipped:
         raise StockError("这件商品已标记为不从自有仓出库")
     if quantity > line.remaining_quantity:
         raise StockError(f"本单最多还能出库 {line.remaining_quantity} 件")
-    warehouse = Warehouse.objects.get(pk=warehouse_id, is_active=True)
-    item = StockItem.objects.filter(sku=line.sku).first()
+    warehouse = Warehouse.objects.get(pk=warehouse_id, owner=operator, is_active=True)
+    item = StockItem.objects.filter(owner=operator, sku=line.sku).first()
     if not item:
         raise StockError("库存系统中找不到该货号")
     balance = StockBalance.objects.filter(warehouse=warehouse, item=item).first()
@@ -154,7 +155,7 @@ def _required_text(payload, key, max_length):
 
 
 @transaction.atomic
-def upsert_external_order(payload):
+def upsert_external_order(payload, *, owner_id):
     if not isinstance(payload, dict):
         raise StockError("订单数据必须是对象")
     version = payload.get("version")
@@ -190,7 +191,7 @@ def upsert_external_order(payload):
         ordered_at = None
 
     order, created = ExternalOrder.objects.select_for_update().get_or_create(
-        platform=platform, store_external_id=store_external_id, external_order_id=external_order_id,
+        owner_id=owner_id, platform=platform, store_external_id=store_external_id, external_order_id=external_order_id,
         defaults={"store_name": store_name, "status": status, "ordered_at": ordered_at, "snapshot_version": version or 0},
     )
     if not created:
@@ -225,7 +226,7 @@ def matching_order_lines(order):
         return []
     lines = list(order.lines.filter(is_present=True, is_skipped=False))
     available = dict(
-        StockBalance.objects.filter(item__sku__in=[line.sku for line in lines], on_hand__gt=0, warehouse__is_active=True)
+        StockBalance.objects.filter(warehouse__owner=order.owner, item__sku__in=[line.sku for line in lines], on_hand__gt=0, warehouse__is_active=True)
         .values("item__sku").annotate(total=Sum("on_hand"))
         .values_list("item__sku", "total")
     )
@@ -276,7 +277,7 @@ def import_opening_stock(uploaded_file, operator):
         raise StockError("表头必须包含：仓库编码、货号、数量；可选商品名称")
     parsed = []
     seen = set()
-    warehouses = {warehouse.code: warehouse for warehouse in Warehouse.objects.filter(is_active=True)}
+    warehouses = {warehouse.code: warehouse for warehouse in Warehouse.objects.filter(owner=operator, is_active=True)}
     for index, row in enumerate(rows, start=2):
         code = str(row.get("仓库编码") or "").strip()
         warehouse = warehouses.get(code)
@@ -297,9 +298,9 @@ def import_opening_stock(uploaded_file, operator):
     if not parsed:
         raise StockError("文件中没有大于0的期初库存")
     for warehouse, sku, _, _ in parsed:
-        if StockMovement.objects.filter(warehouse=warehouse, item__sku=sku).exists():
+        if StockMovement.objects.filter(warehouse=warehouse, item__owner=operator, item__sku=sku).exists():
             raise StockError(f"{warehouse.name} / {sku} 已有库存流水，不能重复导入期初库存")
-        if StockBalance.objects.filter(warehouse=warehouse, item__sku=sku, on_hand__gt=0).exists():
+        if StockBalance.objects.filter(warehouse=warehouse, item__owner=operator, item__sku=sku, on_hand__gt=0).exists():
             raise StockError(f"{warehouse.name} / {sku} 已有库存，不能重复导入期初库存")
     for warehouse, sku, quantity, name in parsed:
         record_inbound(

@@ -34,7 +34,8 @@ def send_outbound_callback(movement_id):
         }
         outgoing = request.Request(
             url, data=json.dumps(payload, ensure_ascii=False).encode(), method='POST',
-            headers={'Content-Type': 'application/json', 'X-Stock-Key': key},
+            headers={'Content-Type': 'application/json', 'X-Stock-Key': key,
+                     'X-Stock-User-Id': str(order.owner_id)},
         )
         with request.urlopen(outgoing, timeout=5) as response:
             if response.status != 200:

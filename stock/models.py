@@ -6,12 +6,14 @@ from django.db import models
 
 
 class Warehouse(models.Model):
-    code = models.CharField("仓库编码", max_length=40, unique=True)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, related_name="stock_warehouses")
+    code = models.CharField("仓库编码", max_length=40)
     name = models.CharField("仓库名称", max_length=100)
     is_active = models.BooleanField("启用", default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        constraints = [models.UniqueConstraint(fields=["owner", "code"], name="unique_owner_warehouse_code")]
         ordering = ["name", "id"]
 
     def __str__(self):
@@ -19,11 +21,13 @@ class Warehouse(models.Model):
 
 
 class StockItem(models.Model):
-    sku = models.CharField("货号", max_length=150, unique=True)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, related_name="stock_items")
+    sku = models.CharField("货号", max_length=150)
     name = models.CharField("商品名称", max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        constraints = [models.UniqueConstraint(fields=["owner", "sku"], name="unique_owner_stock_sku")]
         ordering = ["sku"]
 
     def __str__(self):
@@ -57,6 +61,7 @@ class ExternalOrder(models.Model):
         CANCELLED = "cancelled", "已取消"
         CLOSED = "closed", "已结束"
 
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, related_name="stock_orders")
     platform = models.CharField("平台", max_length=40)
     store_external_id = models.CharField("ERP店铺ID", max_length=80)
     store_name = models.CharField("店铺", max_length=150)
@@ -68,7 +73,7 @@ class ExternalOrder(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["platform", "store_external_id", "external_order_id"], name="unique_external_order")]
+        constraints = [models.UniqueConstraint(fields=["owner", "platform", "store_external_id", "external_order_id"], name="unique_owner_external_order")]
         ordering = ["-received_at", "-id"]
 
     def __str__(self):

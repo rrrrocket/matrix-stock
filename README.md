@@ -1,6 +1,6 @@
 # Matrix Stock
 
-库存由人工入库、盘点和订单出库维护；不读取或改写 ERP 的平台库存池。一个实例服务一个公司。员工可在登录页申请注册，由管理员在 `/admin/` 的用户列表中勾选“工作人员状态”后获得访问权限。多个仓库分别记账，同一订单商品可分多次、从不同仓库出库。
+库存由人工入库、盘点和订单出库维护；不读取或改写 ERP 的平台库存池。每个获准账号独立管理自己的仓库、货号、订单和库存流水；管理员可审核账号，也只能查看自己的库存。员工可在登录页申请注册，由管理员在 `/admin/` 的用户列表中审核。多个仓库分别记账，同一订单商品可分多次、从不同仓库出库。
 
 ## 本地启动
 
@@ -24,6 +24,8 @@
 
 ERP 对 `POST /api/orders/` 发送完整订单快照，HTTP 头 `X-Stock-Key` 使用 `STOCK_ERP_API_KEY`。请求只包含库存业务需要的字段，不传客户个人信息：
 
+ERP 还必须发送已绑定 Stock 账号的 `X-Stock-User-Id`。订单和只读货号目录都按该账号隔离；相同仓库编码、货号和订单号可在不同账号下分别使用。
+
 ```json
 {
   "platform": "ozon",
@@ -43,13 +45,17 @@ ERP 对 `POST /api/orders/` 发送完整订单快照，HTTP 头 `X-Stock-Key` �
 
 ERP 推送时应发送递增的 `version`；相同版本的重复请求不会改写订单，低版本请求会被拒绝。旧的无版本调用仍可用于尚未接入版本控制的订单。
 
+## 历史数据归属
+
+升级时，已有仓库按首笔期初或人工入库的操作账号归属。若数据库只有一个账号，无法判断归属的旧仓库、货号和订单归该账号；多账号情况下无法判断的记录暂不对任何账号开放，避免串号。先备份数据库，再运行迁移；用 `.venv/bin/python manage.py assign_legacy_owner --list` 查看未分配记录，核对后使用 `--user 用户名 --warehouse 仓库ID`、`--order 订单ID` 或 `--item 货号ID` 逐项分配。管理员原有库存仍归管理员本人，不会显示给其他账号。
+
 如需飞书群提醒，在 `.env` 配置 `STOCK_FEISHU_WEBHOOK`，机器人启用了签名校验时再填 `STOCK_FEISHU_SECRET`，然后另开终端运行 `./start.sh test worker`。订单与自有仓库存匹配后，每张订单生成一条通知；失败会重试，订单取消或库存耗尽时不再发送。
 
 ## 出库单号回填 ERP
 
 在 Stock 确认订单出库时填写真实的国内快递单号。Stock 保存单号后，调用 ERP 的 `POST /api/orders/stock-outbound` 回传订单、仓库货号、出库数量和单号。ERP 按操作编号去重，在“订单发货”的国内快递单号栏按货号和数量自动带出；分批出库可对应多个单号，未出库的数量仍待填写。已保存的发货预报由原预报数据管理，不自动覆盖。
 
-在 Stock 的 `.env` 配置 `STOCK_ERP_CALLBACK_URL`，指向 ERP 后端的上述接口，并让两端使用相同的 `STOCK_ERP_API_KEY` / `STOCK_SERVICE_API_KEY`。ERP 还需配置绑定账号 `STOCK_SERVICE_OWNER_ID`。回传失败会保留出库记录；运行 `./start.sh test worker` 可自动重试，期间不会重复扣减库存。生产模式 `./start.sh` 会同时启动 Web 和重试进程。
+在 Stock 的 `.env` 配置 `STOCK_ERP_CALLBACK_URL`，指向 ERP 后端的上述接口，并让两端使用相同的 `STOCK_ERP_API_KEY` / `STOCK_SERVICE_API_KEY`。回传时还会发送订单所属账号的 `X-Stock-User-Id`，ERP 应据此校验绑定关系，避免把不同账号的同号订单混淆。回传失败会保留出库记录；运行 `./start.sh test worker` 可自动重试，期间不会重复扣减库存。生产模式 `./start.sh` 会同时启动 Web 和重试进程。
 
 ## 测试
 

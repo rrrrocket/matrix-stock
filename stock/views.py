@@ -40,7 +40,7 @@ def staff_required(view):
 
 def register(request):
     if request.user.is_authenticated and request.user.is_staff:
-        return redirect("dashboard")
+        return redirect("stock_admin_users" if request.user.is_superuser else "dashboard")
     form = StockRegistrationForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
         form.save()
@@ -49,8 +49,8 @@ def register(request):
     return render(request, "stock/register.html", {"form": form})
 
 
-def _inventory_rows(query="", warehouse_id=""):
-    balances = StockBalance.objects.select_related("warehouse", "item").filter(on_hand__gt=0)
+def _inventory_rows(owner, query="", warehouse_id=""):
+    balances = StockBalance.objects.select_related("warehouse", "item").filter(warehouse__owner=owner, on_hand__gt=0)
     if query:
         balances = balances.filter(Q(item__sku__icontains=query) | Q(item__name__icontains=query))
     if warehouse_id:
@@ -58,8 +58,8 @@ def _inventory_rows(query="", warehouse_id=""):
     return balances.order_by("item__sku", "warehouse__name")[:500]
 
 
-def _order_rows(status_filter="open", query=""):
-    lines = OrderLine.objects.select_related("order").filter(is_present=True)
+def _order_rows(owner, status_filter="open", query=""):
+    lines = OrderLine.objects.select_related("order").filter(order__owner=owner, is_present=True)
     if status_filter == "open":
         lines = lines.filter(order__status=ExternalOrder.Status.OPEN, is_skipped=False, quantity__gt=0)
     elif status_filter == "closed":
@@ -69,7 +69,7 @@ def _order_rows(status_filter="open", query=""):
     lines = list(lines.order_by("-order__received_at", "-id")[:250])
     skus = {line.sku for line in lines}
     stock_by_sku = defaultdict(list)
-    for balance in StockBalance.objects.select_related("warehouse", "item").filter(item__sku__in=skus, on_hand__gt=0, warehouse__is_active=True):
+    for balance in StockBalance.objects.select_related("warehouse", "item").filter(warehouse__owner=owner, item__sku__in=skus, on_hand__gt=0, warehouse__is_active=True):
         stock_by_sku[balance.item.sku].append(balance)
     for line in lines:
         line.stock_options = stock_by_sku[line.sku]
@@ -87,15 +87,15 @@ def _order_rows(status_filter="open", query=""):
 @staff_required
 @require_GET
 def dashboard(request):
-    rows = [line for line in _order_rows() if line.needs_action]
+    rows = [line for line in _order_rows(request.user) if line.needs_action]
     context = {
         "active_nav": "dashboard",
-        "warehouse_count": Warehouse.objects.filter(is_active=True).count(),
-        "sku_count": StockItem.objects.count(),
-        "stock_total": StockBalance.objects.aggregate(total=Sum("on_hand"))["total"] or 0,
+        "warehouse_count": Warehouse.objects.filter(owner=request.user, is_active=True).count(),
+        "sku_count": StockItem.objects.filter(owner=request.user).count(),
+        "stock_total": StockBalance.objects.filter(warehouse__owner=request.user).aggregate(total=Sum("on_hand"))["total"] or 0,
         "pending_count": len(rows),
         "pending_rows": rows[:8],
-        "recent_movements": StockMovement.objects.select_related("warehouse", "item", "operator")[:6],
+        "recent_movements": StockMovement.objects.select_related("warehouse", "item", "operator").filter(warehouse__owner=request.user)[:6],
     }
     return render(request, "stock/dashboard.html", context)
 
@@ -107,14 +107,14 @@ def warehouses(request):
         name = str(request.POST.get("name") or "").strip()
         if not code or not name or len(code) > 40 or len(name) > 100:
             messages.error(request, "请填写有效的仓库编码和名称")
-        elif Warehouse.objects.filter(code=code).exists():
+        elif Warehouse.objects.filter(owner=request.user, code=code).exists():
             messages.error(request, "仓库编码已存在")
         else:
-            Warehouse.objects.create(code=code, name=name)
+            Warehouse.objects.create(owner=request.user, code=code, name=name)
             messages.success(request, "仓库已创建")
         return redirect("warehouses")
     return render(request, "stock/warehouses.html", {
-        "active_nav": "warehouses", "warehouses": Warehouse.objects.all(),
+        "active_nav": "warehouses", "warehouses": Warehouse.objects.filter(owner=request.user),
     })
 
 
@@ -125,8 +125,8 @@ def inventory(request):
     warehouse_id = request.GET.get("warehouse", "").strip()
     return render(request, "stock/inventory.html", {
         "active_nav": "inventory",
-        "balances": _inventory_rows(query, warehouse_id),
-        "warehouses": Warehouse.objects.filter(is_active=True),
+        "balances": _inventory_rows(request.user, query, warehouse_id),
+        "warehouses": Warehouse.objects.filter(owner=request.user, is_active=True),
         "query": query,
         "selected_warehouse": warehouse_id,
     })
@@ -189,7 +189,7 @@ def orders(request):
     if status_filter not in {"open", "closed", "all"}:
         status_filter = "open"
     query = request.GET.get("q", "").strip()
-    rows = _order_rows(status_filter, query)
+    rows = _order_rows(request.user, status_filter, query)
     if status_filter == "open":
         rows = [line for line in rows if line.remaining_quantity > 0]
     return render(request, "stock/orders.html", {
@@ -205,6 +205,7 @@ def outbound(request, line_id):
             line_id=line_id,
             warehouse_id=request.POST.get("warehouse_id"),
             quantity=request.POST.get("quantity"),
+            tracking_number=request.POST.get("tracking_number"),
             operation_id=request.POST.get("operation_id"),
             operator=request.user,
         )
@@ -218,7 +219,7 @@ def outbound(request, line_id):
 @staff_required
 @require_POST
 def skip_order_line(request, line_id):
-    line = get_object_or_404(OrderLine.objects.select_related("order"), pk=line_id)
+    line = get_object_or_404(OrderLine.objects.select_related("order"), pk=line_id, order__owner=request.user)
     if line.order.status != ExternalOrder.Status.OPEN:
         messages.error(request, "订单已结束")
     else:
@@ -232,7 +233,7 @@ def skip_order_line(request, line_id):
 @require_GET
 def movements(request):
     query = request.GET.get("q", "").strip()
-    rows = StockMovement.objects.select_related("warehouse", "item", "operator", "order_line__order")
+    rows = StockMovement.objects.select_related("warehouse", "item", "operator", "order_line__order").filter(warehouse__owner=request.user)
     if query:
         rows = rows.filter(Q(item__sku__icontains=query) | Q(order_line__order__external_order_id__icontains=query))
     return render(request, "stock/movements.html", {
@@ -323,7 +324,7 @@ def catalog_api(request):
     ).exists():
         return JsonResponse({"error": "Stock 账号绑定无效"}, status=403)
     balances = defaultdict(list)
-    for balance in StockBalance.objects.select_related("warehouse").order_by("warehouse__code"):
+    for balance in StockBalance.objects.select_related("warehouse").filter(warehouse__owner_id=int(stock_user_id)).order_by("warehouse__code"):
         balances[balance.item_id].append({
             "warehouse_code": balance.warehouse.code,
             "warehouse_name": balance.warehouse.name,
@@ -331,7 +332,7 @@ def catalog_api(request):
         })
     return JsonResponse({"items": [
         {"sku": item.sku, "name": item.name, "warehouses": balances[item.id]}
-        for item in StockItem.objects.order_by("sku")
+        for item in StockItem.objects.filter(owner_id=int(stock_user_id)).order_by("sku")
     ]})
 
 
@@ -353,7 +354,7 @@ def order_webhook(request):
         return JsonResponse({"error": "订单数据过大"}, status=413)
     try:
         payload = json.loads(request.body)
-        order, created = upsert_external_order(payload)
+        order, created = upsert_external_order(payload, owner_id=int(stock_user_id))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JsonResponse({"error": "无效的JSON"}, status=400)
     except StockError as exc:

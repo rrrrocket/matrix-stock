@@ -26,7 +26,7 @@ def _message_for_order(order):
     lines = [f"店铺：{_clean(order.store_name)}\n订单：{_clean(order.external_order_id)}（{_clean(order.platform)}）"]
     for line, total in matched[:20]:
         stock = StockBalance.objects.select_related("warehouse").filter(
-            item__sku=line.sku, on_hand__gt=0, warehouse__is_active=True,
+            warehouse__owner=order.owner, item__sku=line.sku, on_hand__gt=0, warehouse__is_active=True,
         ).order_by("warehouse__name")
         warehouses = "、".join(f"{_clean(row.warehouse.name)} {row.on_hand}" for row in stock)
         lines.append(f"{_clean(line.sku)}：本单待出库 {line.remaining_quantity}，自有仓合计 {total}（{warehouses}）")
