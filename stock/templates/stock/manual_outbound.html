@@ -1,0 +1,13 @@
+{% extends 'stock/base.html' %}
+{% block content %}
+<div class="page-heading"><h1>批量出库</h1><a class="button secondary" href="{% url 'outbound_documents' %}">出库单记录</a></div>
+<section class="card panel inventory-batch-panel">
+  <div class="panel-head"><h2>手工出库</h2></div>
+  <form method="post" id="manual-outbound-form">{% csrf_token %}<input type="hidden" name="request_id" value="{{ request_id }}">
+    <div class="batch-common-fields"><label>仓库<select name="warehouse_id" required><option value="">选择仓库</option>{% for warehouse in warehouses %}<option value="{{ warehouse.id }}">{{ warehouse.name }}</option>{% endfor %}</select></label><label>用途<input name="purpose" maxlength="200" required placeholder="例如：线下销售、样品寄送"></label><label>收货方<input name="recipient" maxlength="200"></label><label>备注<input name="note" maxlength="500"></label></div>
+    <div class="manual-search"><input id="outbound-sku-search" type="search" placeholder="搜索仓库货号" autocomplete="off" aria-label="搜索仓库货号"><div id="outbound-search-results" class="manual-search-results" role="listbox"></div></div>
+    <div class="table-wrap"><table><thead><tr><th>货号</th><th>可用库存</th><th>出库数量</th><th>成本单价</th><th>小计</th><th>操作</th></tr></thead><tbody id="manual-outbound-rows"><tr><td colspan="6" class="empty-cell">搜索货号后添加</td></tr></tbody></table></div>
+    <div class="manual-outbound-footer"><strong>合计 <span id="manual-outbound-total-quantity">0</span> 件 · ¥<span id="manual-outbound-total-amount">0.00</span></strong><button type="submit" class="button primary" disabled>预览并确认出库</button></div>
+  </form>
+</section>
+{% endblock %}

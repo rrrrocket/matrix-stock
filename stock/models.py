@@ -24,6 +24,7 @@ class StockItem(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, related_name="stock_items")
     sku = models.CharField("货号", max_length=150)
     name = models.CharField("商品名称", max_length=255, blank=True)
+    reference_cost = models.DecimalField("参考成本单价", max_digits=14, decimal_places=4, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -48,6 +49,7 @@ class StockBalance(models.Model):
     warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="balances")
     item = models.ForeignKey(StockItem, on_delete=models.PROTECT, related_name="balances")
     on_hand = models.PositiveIntegerField("实物库存", default=0)
+    avg_unit_cost = models.DecimalField("库存成本单价", max_digits=14, decimal_places=4, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -83,10 +85,10 @@ class ExternalOrder(models.Model):
 class OrderLine(models.Model):
     order = models.ForeignKey(ExternalOrder, on_delete=models.PROTECT, related_name="lines")
     sku = models.CharField("订单货号", max_length=150)
-    product_name = models.CharField("商品名称", max_length=255, blank=True)
+    image_url = models.URLField("商品主图", max_length=1000, blank=True)
     quantity = models.PositiveIntegerField("订单数量", validators=[MinValueValidator(1)])
     outbound_quantity = models.PositiveIntegerField("已出库数量", default=0)
-    is_skipped = models.BooleanField("不使用自有仓", default=False)
+    is_skipped = models.BooleanField("暂不处理", default=False)
     is_present = models.BooleanField("仍在订单中", default=True)
 
     class Meta:
@@ -103,7 +105,9 @@ class StockMovement(models.Model):
         OPENING = "opening", "期初入库"
         INBOUND = "inbound", "人工入库"
         OUTBOUND = "outbound", "订单出库"
+        MANUAL_OUTBOUND = "manual_outbound", "手工出库"
         ADJUST = "adjust", "盘点调整"
+        EDIT = "edit", "库存编辑"
         RETURN = "return", "退货入库"
 
     operation_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -125,6 +129,39 @@ class StockMovement(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+
+
+class OutboundDocument(models.Model):
+    class Source(models.TextChoices):
+        ORDER = "order", "订单出库"
+        MANUAL = "manual", "手工出库"
+
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="outbound_documents")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT)
+    source = models.CharField(max_length=10, choices=Source.choices)
+    request_id = models.UUIDField(unique=True, default=uuid.uuid4)
+    document_no = models.CharField(max_length=32, unique=True, blank=True)
+    purpose = models.CharField(max_length=200, blank=True)
+    recipient = models.CharField(max_length=200, blank=True)
+    note = models.CharField(max_length=500, blank=True)
+    total_quantity = models.PositiveIntegerField(default=0)
+    total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+
+class OutboundDocumentLine(models.Model):
+    document = models.ForeignKey(OutboundDocument, on_delete=models.PROTECT, related_name="lines")
+    movement = models.OneToOneField(StockMovement, on_delete=models.PROTECT, related_name="document_line")
+    order_line = models.ForeignKey(OrderLine, on_delete=models.PROTECT, null=True, blank=True)
+    sku = models.CharField(max_length=150)
+    quantity = models.PositiveIntegerField()
+    unit_cost = models.DecimalField(max_digits=14, decimal_places=4)
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    tracking_number = models.CharField(max_length=200, blank=True)
 
 
 class OrderAlert(models.Model):

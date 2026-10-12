@@ -4,16 +4,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>用户管理 · Matrix Stock</title>
-  <link rel="icon" type="image/svg+xml" href="{% static 'stock/favicon.svg' %}">
-  <link rel="stylesheet" href="{% static 'stock/app.css' %}">
-  <link rel="stylesheet" href="{% static 'stock/admin_users.css' %}">
-  <script defer src="{% static 'stock/admin_users.js' %}"></script>
+  <title>Matrix Stock 库存管理</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'stock/matrix-stock-mark.svg' %}?v=5">
+  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261012-4">
+  <link rel="stylesheet" href="{% static 'stock/admin_users.css' %}?v=20261012-1">
+  <script defer src="{% static 'stock/admin_users.js' %}?v=20261012-1"></script>
 </head>
 <body class="admin-workbench-body">
   <header class="admin-topbar">
     <div class="admin-topbar-inner">
-      <a class="admin-brand" href="{% url 'stock_admin_users' %}"><img src="{% static 'stock/favicon.svg' %}" alt=""><span>Matrix <b>Stock</b></span><small>管理中心</small></a>
+      <a class="admin-brand" href="{% url 'stock_admin_users' %}"><img src="{% static 'stock/matrix-stock-mark.svg' %}?v=5" alt=""><span>Matrix <b>Stock</b></span></a>
       <nav class="admin-nav" aria-label="管理中心导航"><a href="{% url 'stock_admin_users' %}" aria-current="page">用户管理</a></nav>
       <div class="admin-account">
         <span class="admin-avatar" aria-hidden="true">{{ request.user.username|slice:':1'|upper }}</span>
@@ -24,9 +24,9 @@
   </header>
 
   <main class="admin-workbench">
-    {% if messages %}<div class="admin-messages" role="status">{% for message in messages %}<div class="admin-message {% if message.tags == 'error' %}admin-message-error{% endif %}">{{ message }}</div>{% endfor %}</div>{% endif %}
+    {% if messages %}<div class="admin-messages" role="status">{% for message in messages %}<div class="admin-message {% if message.tags == 'error' %}admin-message-error{% endif %}"><span>{{ message }}</span><button type="button" class="admin-message-close" data-dismiss-message aria-label="关闭提示">×</button></div>{% endfor %}</div>{% endif %}
     <section class="admin-page-header">
-      <div><div class="admin-eyebrow">User Administration</div><h1>用户管理</h1></div>
+      <h1>用户管理</h1>
       <a class="admin-refresh" href="{{ request.get_full_path }}">刷新</a>
     </section>
 

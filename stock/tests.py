@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import os
 import uuid
+from decimal import Decimal
 from io import BytesIO
 from io import StringIO
 from urllib.parse import parse_qs, urlsplit
@@ -17,9 +18,9 @@ from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from openpyxl import Workbook
 
-from .models import ExternalOrder, OrderAlert, OrderLine, StockBalance, StockItem, StockMovement, Warehouse
+from .models import ExternalOrder, OrderAlert, OrderLine, OutboundDocument, StockBalance, StockItem, StockMovement, Warehouse
 from .notifications import dispatch_pending_alerts
-from .services import StockError, import_opening_stock, record_inbound, record_outbound, upsert_external_order
+from .services import StockError, adjust_stock, import_opening_stock, record_batch_order_outbound, record_inbound, record_manual_outbound, record_order_outbound_document, record_outbound, upsert_external_order
 from .erp_callback import send_outbound_callback
 
 
@@ -35,6 +36,136 @@ class StockFlowTests(TestCase):
             "order_id": "posting-1", "status": "open",
             "items": [{"sku": "SKU-1", "name": "测试商品", "quantity": 5}],
         }
+
+    def test_cost_average_and_manual_document_snapshot(self):
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.avg_unit_cost = Decimal("10.0000")
+        balance.save(update_fields=["avg_unit_cost"])
+        record_inbound(warehouse_id=self.a.id, sku="SKU-1", quantity=2, unit_cost="15.0000", operator=self.user)
+        balance.refresh_from_db()
+        self.assertEqual(balance.avg_unit_cost, Decimal("12.0000"))
+        request_id = uuid.uuid4()
+        kwargs = dict(warehouse_id=self.a.id, rows=[{"sku": "SKU-1", "quantity": "2"}],
+                      purpose="样品寄送", recipient="客户", note="测试", operator=self.user, request_id=request_id)
+        document = record_manual_outbound(**kwargs)
+        self.assertEqual((document.total_quantity, document.total_amount), (2, Decimal("24.00")))
+        self.assertEqual(document.lines.get().unit_cost, Decimal("12.0000"))
+        self.assertEqual(record_manual_outbound(**kwargs).pk, document.pk)
+        self.assertEqual(OutboundDocument.objects.count(), 1)
+        balance.refresh_from_db()
+        self.assertEqual(balance.on_hand, 3)
+        balance.avg_unit_cost = Decimal("18.0000")
+        balance.save(update_fields=["avg_unit_cost"])
+        document.refresh_from_db()
+        self.assertEqual(document.total_amount, Decimal("24.00"))
+        self.assertEqual(document.lines.get().unit_cost, Decimal("12.0000"))
+        self.assertIsNone(document.lines.get().movement.order_line)
+        self.assertFalse(send_outbound_callback(document.lines.get().movement_id))
+
+    def test_manual_outbound_is_atomic_and_requires_cost(self):
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.avg_unit_cost = Decimal("5.0000")
+        balance.save(update_fields=["avg_unit_cost"])
+        with self.assertRaises(StockError):
+            record_manual_outbound(warehouse_id=self.a.id, rows=[{"sku": "SKU-1", "quantity": 1},
+                {"sku": "MISSING", "quantity": 1}], purpose="线下销售", recipient="", note="",
+                operator=self.user, request_id=uuid.uuid4())
+        balance.refresh_from_db()
+        self.assertEqual(balance.on_hand, 3)
+        self.assertFalse(OutboundDocument.objects.exists())
+        balance.avg_unit_cost = None
+        balance.save(update_fields=["avg_unit_cost"])
+        with self.assertRaises(StockError):
+            record_manual_outbound(warehouse_id=self.a.id, rows=[{"sku": "SKU-1", "quantity": 1}],
+                purpose="线下销售", recipient="", note="", operator=self.user, request_id=uuid.uuid4())
+        self.assertFalse(OutboundDocument.objects.exists())
+
+    def test_order_batch_documents_group_by_warehouse_and_keep_tracking(self):
+        for warehouse in (self.a, self.b):
+            balance = StockBalance.objects.get(warehouse=warehouse, item__sku="SKU-1")
+            balance.avg_unit_cost = Decimal("7.2500")
+            balance.save(update_fields=["avg_unit_cost"])
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        second_payload = dict(self.payload, order_id="posting-2")
+        second_order, _ = upsert_external_order(second_payload, owner_id=self.user.pk)
+        rows = [
+            {"line_id": str(order.lines.get().pk), "warehouse_id": str(self.a.pk), "quantity": "2",
+             "tracking_number": "YT-1", "operation_id": str(uuid.uuid4())},
+            {"line_id": second_order.lines.get().pk, "warehouse_id": self.a.pk, "quantity": 1,
+             "tracking_number": "YT-2", "operation_id": str(uuid.uuid4())},
+        ]
+        documents, movements = record_batch_order_outbound(rows=rows, operator=self.user)
+        self.assertEqual(len(documents), 1)
+        self.assertEqual((documents[0].total_quantity, documents[0].total_amount), (3, Decimal("21.75")))
+        self.assertEqual(set(documents[0].lines.values_list("tracking_number", flat=True)), {"YT-1", "YT-2"})
+        again, _ = record_batch_order_outbound(rows=rows, operator=self.user)
+        self.assertEqual([doc.pk for doc in again], [documents[0].pk])
+        self.assertEqual(OutboundDocument.objects.count(), 1)
+        self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 0)
+
+    def test_order_batch_rolls_back_if_second_row_has_no_cost(self):
+        first = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        first.avg_unit_cost = Decimal("8.0000")
+        first.save(update_fields=["avg_unit_cost"])
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        second_payload = dict(self.payload, order_id="posting-2")
+        other_order, _ = upsert_external_order(second_payload, owner_id=self.user.pk)
+        rows = [
+            {"line_id": order.lines.get().pk, "warehouse_id": self.a.pk, "quantity": 1,
+             "tracking_number": "YT-1", "operation_id": str(uuid.uuid4())},
+            {"line_id": other_order.lines.get().pk, "warehouse_id": self.b.pk, "quantity": 1,
+             "tracking_number": "YT-2", "operation_id": str(uuid.uuid4())},
+        ]
+        with self.assertRaises(StockError):
+            record_batch_order_outbound(rows=rows, operator=self.user)
+        first.refresh_from_db()
+        self.assertEqual(first.on_hand, 3)
+        self.assertFalse(OutboundDocument.objects.exists())
+        self.assertEqual(order.lines.get().outbound_quantity, 0)
+
+    def test_single_order_outbound_creates_document_with_cost_snapshot(self):
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.avg_unit_cost = Decimal("3.3333")
+        balance.save(update_fields=["avg_unit_cost"])
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        operation_id = uuid.uuid4()
+        document, movement = record_order_outbound_document(line_id=order.lines.get().pk,
+            warehouse_id=self.a.pk, quantity=3, tracking_number="YT-123", operator=self.user,
+            operation_id=operation_id)
+        self.assertEqual(document.total_amount, Decimal("10.00"))
+        self.assertEqual(document.lines.get().tracking_number, "YT-123")
+        self.assertEqual(document.lines.get().movement, movement)
+        again, _ = record_order_outbound_document(line_id=order.lines.get().pk,
+            warehouse_id=self.a.pk, quantity=3, tracking_number="YT-123", operator=self.user,
+            operation_id=operation_id)
+        self.assertEqual(again.pk, document.pk)
+
+    def test_manual_outbound_search_and_document_are_owner_scoped(self):
+        self.client.force_login(self.user)
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.avg_unit_cost = Decimal("5.0000")
+        balance.save(update_fields=["avg_unit_cost"])
+        response = self.client.get(reverse("outbound_stock_search"), {"warehouse_id": self.a.id, "q": "SKU"})
+        self.assertEqual(response.json()["items"][0]["unit_cost"], "5.0000")
+        document = record_manual_outbound(warehouse_id=self.a.id, rows=[{"sku": "SKU-1", "quantity": 1}],
+            purpose="样品", recipient="", note="", operator=self.user, request_id=uuid.uuid4())
+        self.assertContains(self.client.get(reverse("outbound_document", args=[document.id])), document.document_no)
+        other = get_user_model().objects.create_user(username="other-stock", password="password", is_staff=True)
+        self.client.force_login(other)
+        self.assertEqual(self.client.get(reverse("outbound_document", args=[document.id])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("outbound_stock_search"), {"warehouse_id": self.a.id, "q": "SKU"}).json()["items"], [])
+
+    def test_cost_save_returns_inline_result_and_displays_compact_number(self):
+        self.client.force_login(self.user)
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        url = reverse("update_inventory_cost", args=[balance.pk])
+        response = self.client.post(url, {"unit_cost": "12.5000"}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["unit_cost"], "12.5")
+        self.assertContains(self.client.get(reverse("inventory")), 'value="12.5"')
+        response = self.client.post(url, {"unit_cost": "12.0000"}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(response.json()["unit_cost"], "12")
+        self.assertContains(self.client.get(reverse("inventory")), 'value="12"')
 
     def test_manual_inbound_form_adds_stock(self):
         self.client.force_login(self.user)
@@ -55,6 +186,109 @@ class StockFlowTests(TestCase):
             movement_type=StockMovement.Type.INBOUND,
             quantity_change=2,
         ).exists())
+        balance = next(row for row in self.client.get(reverse("inventory")).context["balances"]
+                       if row.item.sku == "SKU-NEW-INBOUND")
+        self.assertEqual(balance.latest_inbound_note, "人工入库测试")
+        record_inbound(warehouse_id=self.a.id, sku="SKU-NEW-INBOUND", quantity=1,
+                       note="第二次入库备注", operator=self.user)
+        balance = next(row for row in self.client.get(reverse("inventory")).context["balances"]
+                       if row.item.sku == "SKU-NEW-INBOUND")
+        self.assertEqual(balance.latest_inbound_note, "第二次入库备注")
+
+    def test_batch_inbound_uses_shared_defaults_and_rolls_back_invalid_rows(self):
+        self.client.force_login(self.user)
+        inventory_page = self.client.get(reverse("inventory"))
+        self.assertContains(inventory_page, "批量入库")
+        self.assertNotContains(inventory_page, "Excel 期初库存")
+        self.assertNotContains(inventory_page, "盘点调整")
+        response = self.client.post(reverse("batch_inbound"), {
+            "warehouse_id": self.a.pk, "default_quantity": "2",
+            "sku": ["BATCH-1", "BATCH-2"], "quantity": ["", "5"],
+            "note": ["首批", "第二件"],
+        })
+        self.assertRedirects(response, reverse("inventory"))
+        self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="BATCH-1").on_hand, 2)
+        self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="BATCH-2").on_hand, 5)
+        self.assertEqual(StockMovement.objects.get(warehouse=self.a, item__sku="BATCH-2").note, "第二件")
+        self.client.post(reverse("batch_inbound"), {
+            "warehouse_id": self.a.pk, "default_quantity": "1",
+            "sku": ["BATCH-3", ""], "quantity": ["", ""], "note": ["", ""],
+        })
+        self.assertFalse(StockItem.objects.filter(owner=self.user, sku="BATCH-3").exists())
+
+    def test_direct_inventory_edit_records_history_and_rejects_stale_value(self):
+        self.client.force_login(self.user)
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        url = reverse("edit_inventory_quantity", args=[balance.pk])
+        self.assertRedirects(self.client.post(url, {
+            "expected_quantity": "3", "new_quantity": "8",
+        }), reverse("inventory"))
+        balance.refresh_from_db()
+        self.assertEqual(balance.on_hand, 8)
+        change = StockMovement.objects.filter(warehouse=self.a, item=balance.item).latest("id")
+        self.assertEqual((change.before_quantity, change.after_quantity, change.quantity_change), (3, 8, 5))
+        self.assertEqual(change.operator, self.user)
+        self.assertEqual(change.movement_type, StockMovement.Type.EDIT)
+        self.assertEqual(change.note, "库存明细直接编辑")
+        self.client.post(url, {"expected_quantity": "3", "new_quantity": "1"})
+        balance.refresh_from_db()
+        self.assertEqual(balance.on_hand, 8)
+        self.assertEqual(StockMovement.objects.filter(warehouse=self.a, item=balance.item).count(), 2)
+        self.client.post(url, {"expected_quantity": "8", "new_quantity": "0"})
+        balance.refresh_from_db()
+        self.assertEqual(balance.on_hand, 0)
+        self.assertEqual(StockMovement.objects.filter(warehouse=self.a, item=balance.item).count(), 3)
+
+    def test_inline_inventory_quantity_save_keeps_current_row_in_sync(self):
+        self.client.force_login(self.user)
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        url = reverse("edit_inventory_quantity", args=[balance.pk])
+        response = self.client.post(url, {"expected_quantity": "3", "new_quantity": "8"},
+                                    HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["quantity"], 8)
+        self.assertIn("updated_at", response.json())
+        stale = self.client.post(url, {"expected_quantity": "3", "new_quantity": "9"},
+                                 HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json()["current_quantity"], 8)
+        self.assertEqual(StockBalance.objects.get(pk=balance.pk).on_hand, 8)
+
+    def test_order_can_resume_after_temporarily_skipping(self):
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        line = order.lines.get()
+        self.client.force_login(self.user)
+        self.assertRedirects(self.client.post(reverse("skip_order_line", args=[line.pk])), reverse("orders") + "?status=paused")
+        line.refresh_from_db()
+        self.assertTrue(line.is_skipped)
+        paused_page = self.client.get(reverse("orders"), {"status": "paused"})
+        self.assertContains(paused_page, "暂不处理")
+        self.assertContains(paused_page, "继续处理")
+        self.assertNotContains(self.client.get(reverse("orders"), {"status": "closed"}), "posting-1")
+        self.assertRedirects(self.client.post(reverse("resume_order_line", args=[line.pk])), reverse("orders"))
+        line.refresh_from_db()
+        self.assertFalse(line.is_skipped)
+        self.assertContains(self.client.get(reverse("orders")), "有货")
+
+    def test_delete_warehouse_keeps_stock_and_movement_history_safe(self):
+        self.client.force_login(self.user)
+        empty = Warehouse.objects.create(owner=self.user, code="EMPTY", name="空仓")
+        self.assertEqual(self.client.get(reverse("delete_warehouse", args=[empty.pk])).status_code, 405)
+        self.assertRedirects(self.client.post(reverse("delete_warehouse", args=[empty.pk])), reverse("warehouses"))
+        self.assertFalse(Warehouse.objects.filter(pk=empty.pk).exists())
+
+        blocked = self.client.post(reverse("delete_warehouse", args=[self.a.pk]), follow=True)
+        self.assertContains(blocked, "仓库仍有库存")
+        self.a.refresh_from_db()
+        self.assertTrue(self.a.is_active)
+
+        adjust_stock(warehouse_id=self.b.pk, sku="SKU-1", new_quantity="0", note="清空库存", operator=self.user)
+        movement_count = StockMovement.objects.filter(warehouse=self.b).count()
+        self.assertRedirects(self.client.post(reverse("delete_warehouse", args=[self.b.pk])), reverse("warehouses"))
+        self.b.refresh_from_db()
+        self.assertFalse(self.b.is_active)
+        self.assertEqual(StockMovement.objects.filter(warehouse=self.b).count(), movement_count)
+        self.assertNotContains(self.client.get(reverse("warehouses")), "义乌仓")
 
     @patch.dict(os.environ, {"STOCK_ERP_API_KEY": "test-key"})
     def test_catalog_api_requires_key_and_lists_zero_stock_items(self):
@@ -179,6 +413,20 @@ class StockFlowTests(TestCase):
         self.payload["store_id"] = "19"
         second, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
         self.assertNotEqual(first.id, second.id)
+
+    def test_order_image_is_saved_without_product_name(self):
+        self.payload["items"][0]["image_url"] = "https://example.test/main.jpg"
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        self.assertEqual(order.lines.get().image_url, "https://example.test/main.jpg")
+        self.assertNotIn("product_name", [field.name for field in OrderLine._meta.fields])
+        self.client.force_login(self.user)
+        order_page = self.client.get(reverse("orders"))
+        self.assertContains(order_page, 'data-order-image="https://example.test/main.jpg"')
+        self.assertNotContains(order_page, "测试商品")
+        self.payload["version"] = 1
+        self.payload["items"][0]["image_url"] = "javascript:alert(1)"
+        upsert_external_order(self.payload, owner_id=self.user.pk)
+        self.assertEqual(order.lines.get().image_url, "")
 
     def test_duplicate_sku_rows_are_aggregated(self):
         self.payload["items"].append({"sku": "SKU-1", "quantity": 2})
@@ -318,7 +566,17 @@ class AccountIsolationTests(TestCase):
             "warehouse_id": self.warehouse_b.pk, "sku": "ONLY-B", "quantity": 1,
         }).status_code, 302)
         self.assertEqual(StockBalance.objects.get(warehouse=self.warehouse_b).on_hand, 5)
+        foreign_balance = StockBalance.objects.get(warehouse=self.warehouse_b)
+        self.assertEqual(self.client.post(reverse("edit_inventory_quantity", args=[foreign_balance.pk]), {
+            "expected_quantity": "5", "new_quantity": "0",
+        }).status_code, 404)
+        foreign_balance.refresh_from_db()
+        self.assertEqual(foreign_balance.on_hand, 5)
+        self.assertEqual(self.client.post(reverse("delete_warehouse", args=[self.warehouse_b.pk])).status_code, 404)
+        self.warehouse_b.refresh_from_db()
+        self.assertTrue(self.warehouse_b.is_active)
         self.assertEqual(self.client.post(reverse("skip_order_line", args=[self.order_b.lines.get().pk])).status_code, 404)
+        self.assertEqual(self.client.post(reverse("resume_order_line", args=[self.order_b.lines.get().pk])).status_code, 404)
         self.assertEqual(self.client.post(reverse("outbound", args=[self.order_b.lines.get().pk]), {
             "warehouse_id": self.warehouse_b.pk, "quantity": 1,
             "tracking_number": "YT123", "operation_id": str(uuid.uuid4()),

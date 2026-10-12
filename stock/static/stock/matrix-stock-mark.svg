@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="35%">
+      <stop offset="0%" stop-color="#54a3e8" />
+      <stop offset="22%" stop-color="#4897e4" />
+      <stop offset="45%" stop-color="#2c7ddb" />
+      <stop offset="68%" stop-color="#2775d5" />
+      <stop offset="100%" stop-color="#2069ca" />
+    </linearGradient>
+    <linearGradient id="badge" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2586e2" />
+      <stop offset="100%" stop-color="#1355ba" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" flood-color="#1f3d8a" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <g transform="translate(62.5 78)">
+    <path d="M 11 19 L 6 28 L 6 31 L 4 35 L 4 99 L 3 100 L 3 116 L 4 117 L 3 120 L 3 447 L 6 458 L 14 471 L 25 478 L 35 479 L 36 480 L 52 480 L 53 479 L 65 480 L 66 479 L 71 479 L 86 472 L 96 460 L 100 450 L 100 285 L 101 284 L 100 174 L 101 173 L 103 173 L 107 178 L 109 183 L 114 189 L 114 192 L 119 197 L 131 216 L 135 220 L 138 227 L 151 244 L 151 247 L 157 253 L 159 258 L 162 261 L 163 265 L 166 267 L 171 276 L 173 277 L 173 279 L 177 283 L 179 288 L 181 289 L 187 300 L 189 301 L 195 310 L 195 312 L 200 317 L 203 324 L 205 325 L 205 327 L 210 332 L 213 338 L 216 340 L 218 345 L 223 351 L 223 353 L 233 363 L 240 367 L 243 367 L 247 369 L 264 369 L 270 367 L 280 361 L 286 355 L 297 340 L 302 331 L 311 320 L 311 318 L 316 313 L 318 308 L 321 306 L 323 301 L 325 300 L 336 282 L 342 276 L 342 274 L 346 270 L 356 253 L 362 247 L 363 243 L 372 230 L 374 229 L 386 209 L 388 208 L 388 206 L 391 204 L 395 196 L 400 190 L 407 178 L 409 177 L 409 175 L 411 173 L 413 173 L 414 174 L 414 307 L 413 308 L 414 333 L 413 334 L 413 344 L 414 345 L 414 450 L 417 460 L 425 471 L 430 474 L 431 476 L 440 479 L 450 479 L 451 480 L 455 479 L 482 479 L 493 475 L 500 469 L 503 468 L 503 466 L 509 456 L 511 446 L 511 316 L 510 315 L 511 310 L 511 35 L 508 25 L 503 18 L 503 16 L 494 9 L 483 4 L 430 4 L 425 5 L 411 12 L 400 23 L 385 45 L 383 46 L 381 51 L 379 52 L 378 56 L 367 71 L 367 73 L 357 85 L 353 93 L 351 94 L 345 103 L 345 105 L 339 112 L 339 114 L 334 119 L 327 131 L 325 132 L 320 141 L 316 145 L 316 147 L 314 148 L 296 178 L 289 188 L 287 189 L 285 195 L 283 196 L 281 201 L 276 206 L 274 211 L 272 212 L 266 223 L 261 229 L 258 229 L 255 227 L 243 210 L 243 208 L 236 199 L 222 176 L 216 169 L 213 163 L 211 162 L 210 158 L 204 150 L 202 145 L 200 144 L 199 141 L 190 130 L 187 124 L 182 118 L 182 116 L 180 115 L 166 93 L 157 82 L 157 80 L 155 79 L 154 76 L 150 72 L 149 69 L 146 66 L 146 64 L 143 62 L 140 56 L 136 52 L 135 49 L 118 25 L 104 11 L 95 7 L 94 5 L 89 4 L 82 4 L 81 3 L 43 3 L 42 4 L 31 5 L 19 11 Z" fill="url(#grad)" fill-rule="evenodd" stroke="#b4bdbf" stroke-width="1.8" stroke-linejoin="round" filter="url(#shadow)"/>
+  </g>
+  <g>
+    <rect x="412" y="391" width="194" height="194" rx="48" fill="url(#badge)" stroke="#e7f5ff" stroke-width="10"/>
+    <path d="M553 448c-22-20-55-24-77-7-24 18-19 42 3 53 18 9 43 11 59 22 26 17 22 43-3 55-24 12-53 5-72-13" fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -13,17 +13,18 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.db.models import Q, Sum
+from django.db.models import OuterRef, Q, Subquery, Sum
 from django.db import transaction
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 from django.utils import timezone
 
-from .models import ErpLinkGrant, ExternalOrder, OrderLine, StockBalance, StockItem, StockMovement, Warehouse
+from .models import ErpLinkGrant, ExternalOrder, OrderLine, OutboundDocument, StockBalance, StockItem, StockMovement, Warehouse
 from .forms import StockRegistrationForm
-from .services import StockError, adjust_stock, import_opening_stock, record_inbound, record_outbound, upsert_external_order
+from .services import StockError, adjust_stock, parse_cost, record_batch_inbound, record_inbound, record_manual_outbound, record_order_outbound_document, record_batch_order_outbound, upsert_external_order
 from .erp_callback import send_outbound_callback
 
 
@@ -55,15 +56,21 @@ def _inventory_rows(owner, query="", warehouse_id=""):
         balances = balances.filter(Q(item__sku__icontains=query) | Q(item__name__icontains=query))
     if warehouse_id:
         balances = balances.filter(warehouse_id=warehouse_id)
-    return balances.order_by("item__sku", "warehouse__name")[:500]
+    latest_inbound_note = StockMovement.objects.filter(
+        warehouse_id=OuterRef("warehouse_id"), item_id=OuterRef("item_id"),
+        movement_type=StockMovement.Type.INBOUND,
+    ).order_by("-created_at", "-id").values("note")[:1]
+    return balances.annotate(latest_inbound_note=Subquery(latest_inbound_note)).order_by("item__sku", "warehouse__name")[:500]
 
 
 def _order_rows(owner, status_filter="open", query=""):
     lines = OrderLine.objects.select_related("order").filter(order__owner=owner, is_present=True)
     if status_filter == "open":
         lines = lines.filter(order__status=ExternalOrder.Status.OPEN, is_skipped=False, quantity__gt=0)
+    elif status_filter == "paused":
+        lines = lines.filter(order__status=ExternalOrder.Status.OPEN, is_skipped=True)
     elif status_filter == "closed":
-        lines = lines.filter(Q(order__status__in=[ExternalOrder.Status.CANCELLED, ExternalOrder.Status.CLOSED]) | Q(is_skipped=True))
+        lines = lines.filter(order__status__in=[ExternalOrder.Status.CANCELLED, ExternalOrder.Status.CLOSED])
     if query:
         lines = lines.filter(Q(sku__icontains=query) | Q(order__external_order_id__icontains=query) | Q(order__store_name__icontains=query))
     lines = list(lines.order_by("-order__received_at", "-id")[:250])
@@ -91,7 +98,7 @@ def dashboard(request):
     context = {
         "active_nav": "dashboard",
         "warehouse_count": Warehouse.objects.filter(owner=request.user, is_active=True).count(),
-        "sku_count": StockItem.objects.filter(owner=request.user).count(),
+        "sku_count": StockBalance.objects.filter(warehouse__owner=request.user, on_hand__gt=0).values("item_id").distinct().count(),
         "stock_total": StockBalance.objects.filter(warehouse__owner=request.user).aggregate(total=Sum("on_hand"))["total"] or 0,
         "pending_count": len(rows),
         "pending_rows": rows[:8],
@@ -114,8 +121,27 @@ def warehouses(request):
             messages.success(request, "仓库已创建")
         return redirect("warehouses")
     return render(request, "stock/warehouses.html", {
-        "active_nav": "warehouses", "warehouses": Warehouse.objects.filter(owner=request.user),
+        "active_nav": "warehouses", "warehouses": Warehouse.objects.filter(owner=request.user, is_active=True),
     })
+
+
+@staff_required
+@require_POST
+@transaction.atomic
+def delete_warehouse(request, warehouse_id):
+    warehouse = get_object_or_404(Warehouse.objects.select_for_update(), pk=warehouse_id, owner=request.user, is_active=True)
+    balances = StockBalance.objects.filter(warehouse=warehouse)
+    if balances.filter(on_hand__gt=0).exists():
+        messages.error(request, "仓库仍有库存，请先清空库存")
+    elif StockMovement.objects.filter(warehouse=warehouse).exists():
+        warehouse.is_active = False
+        warehouse.save(update_fields=["is_active"])
+        messages.success(request, "仓库已删除，历史流水已保留")
+    else:
+        balances.delete()
+        warehouse.delete()
+        messages.success(request, "仓库已删除")
+    return redirect("warehouses")
 
 
 @staff_required
@@ -152,14 +178,28 @@ def inbound(request):
 
 @staff_required
 @require_POST
-def import_opening(request):
-    uploaded = request.FILES.get("file")
-    if not uploaded:
-        messages.error(request, "请选择期初库存文件")
+def batch_inbound(request):
+    skus = request.POST.getlist("sku")
+    quantities = request.POST.getlist("quantity")
+    notes = request.POST.getlist("note")
+    costs = request.POST.getlist("unit_cost")
+    if not costs:
+        costs = [""] * len(skus)
+    if len(skus) != len(quantities) or len(skus) != len(notes) or len(skus) != len(costs):
+        messages.error(request, "入库数据不完整")
         return redirect("inventory")
+    rows = [
+        {"sku": sku, "quantity": quantity, "note": note, "unit_cost": cost}
+        for sku, quantity, note, cost in zip(skus, quantities, notes, costs)
+    ]
     try:
-        count = import_opening_stock(uploaded, request.user)
-        messages.success(request, f"期初库存导入成功，共 {count} 条。已有流水的仓库货号不会被重复导入。")
+        movements = record_batch_inbound(
+            warehouse_id=request.POST.get("warehouse_id"),
+            rows=rows,
+            default_quantity=request.POST.get("default_quantity"),
+            operator=request.user,
+        )
+        messages.success(request, f"已入库 {len(movements)} 条，共 {sum(row.quantity_change for row in movements)} 件")
     except StockError as exc:
         messages.error(request, str(exc))
     return redirect("inventory")
@@ -167,18 +207,58 @@ def import_opening(request):
 
 @staff_required
 @require_POST
-def adjust(request):
+def edit_inventory_quantity(request, balance_id):
+    balance = get_object_or_404(
+        StockBalance.objects.select_related("warehouse", "item"),
+        pk=balance_id, warehouse__owner=request.user, warehouse__is_active=True,
+    )
+    is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     try:
         movement = adjust_stock(
-            warehouse_id=request.POST.get("warehouse_id"),
-            sku=request.POST.get("sku"),
+            warehouse_id=balance.warehouse_id,
+            sku=balance.item.sku,
             new_quantity=request.POST.get("new_quantity"),
-            note=request.POST.get("note"),
+            expected_quantity=request.POST.get("expected_quantity"),
+            note="库存明细直接编辑",
+            movement_type=StockMovement.Type.EDIT,
             operator=request.user,
         )
-        messages.success(request, f"{movement.item.sku} 已调整为 {movement.after_quantity} 件")
-    except (StockError, Warehouse.DoesNotExist, StockItem.DoesNotExist) as exc:
-        messages.error(request, str(exc) if isinstance(exc, StockError) else "仓库或货号不存在")
+        message = f"{movement.item.sku} 已更新为 {movement.after_quantity} 件"
+        if is_async:
+            balance.refresh_from_db()
+            return JsonResponse({"message": message, "quantity": movement.after_quantity,
+                                 "updated_at": timezone.localtime(balance.updated_at).strftime("%m-%d %H:%M")})
+        messages.success(request, message)
+    except StockError as exc:
+        if is_async:
+            balance.refresh_from_db()
+            return JsonResponse({"error": str(exc), "current_quantity": balance.on_hand}, status=409)
+        messages.error(request, str(exc))
+    return redirect("inventory")
+
+
+@staff_required
+@require_POST
+@transaction.atomic
+def update_inventory_cost(request, balance_id):
+    balance = get_object_or_404(StockBalance.objects.select_for_update().select_related("item", "warehouse"),
+                                pk=balance_id, warehouse__owner=request.user, warehouse__is_active=True)
+    is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    try:
+        cost = parse_cost(request.POST.get("unit_cost"), required=True)
+        balance.avg_unit_cost = cost
+        balance.save(update_fields=["avg_unit_cost", "updated_at"])
+        balance.item.reference_cost = cost
+        balance.item.save(update_fields=["reference_cost"])
+        message = f"{balance.item.sku} 成本单价已保存"
+        if is_async:
+            return JsonResponse({"message": message, "unit_cost": format(cost.normalize(), "f"),
+                                 "updated_at": timezone.localtime(balance.updated_at).strftime("%m-%d %H:%M")})
+        messages.success(request, message)
+    except StockError as exc:
+        if is_async:
+            return JsonResponse({"error": str(exc)}, status=400)
+        messages.error(request, str(exc))
     return redirect("inventory")
 
 
@@ -186,7 +266,7 @@ def adjust(request):
 @require_GET
 def orders(request):
     status_filter = request.GET.get("status", "open")
-    if status_filter not in {"open", "closed", "all"}:
+    if status_filter not in {"open", "paused", "closed", "all"}:
         status_filter = "open"
     query = request.GET.get("q", "").strip()
     rows = _order_rows(request.user, status_filter, query)
@@ -201,7 +281,7 @@ def orders(request):
 @require_POST
 def outbound(request, line_id):
     try:
-        movement = record_outbound(
+        document, movement = record_order_outbound_document(
             line_id=line_id,
             warehouse_id=request.POST.get("warehouse_id"),
             quantity=request.POST.get("quantity"),
@@ -210,10 +290,83 @@ def outbound(request, line_id):
             operator=request.user,
         )
         synced = send_outbound_callback(movement.id)
-        messages.success(request, f"已从 {movement.warehouse.name} 出库 {-movement.quantity_change} 件；国内快递单号{'已回填 ERP' if synced else '待回填 ERP，将自动重试'}")
+        messages.success(request, f"出库单 {document.document_no} 已生成；国内快递单号{'已回填 ERP' if synced else '待回填 ERP，将自动重试'}")
+        return redirect("outbound_document", document_id=document.id)
     except (StockError, Warehouse.DoesNotExist, OrderLine.DoesNotExist) as exc:
         messages.error(request, str(exc) if isinstance(exc, StockError) else "订单商品或仓库不存在")
     return redirect("orders")
+
+
+@staff_required
+@require_POST
+def batch_order_outbound(request):
+    try:
+        rows = json.loads(request.POST.get("rows", ""))
+        documents, movements = record_batch_order_outbound(rows=rows, operator=request.user)
+        for movement in movements:
+            send_outbound_callback(movement.id)
+        messages.success(request, f"已生成 {len(documents)} 份出库单，共 {sum(doc.total_quantity for doc in documents)} 件")
+        return redirect("outbound_document", document_id=documents[0].id)
+    except (ValueError, TypeError, StockError, Warehouse.DoesNotExist, OrderLine.DoesNotExist) as exc:
+        messages.error(request, str(exc) if isinstance(exc, StockError) else "批量出库数据无效")
+        return redirect("orders")
+
+
+@staff_required
+def manual_outbound(request):
+    if request.method == "POST":
+        skus = request.POST.getlist("sku")
+        quantities = request.POST.getlist("quantity")
+        try:
+            if len(skus) != len(quantities):
+                raise StockError("出库数据不完整")
+            document = record_manual_outbound(
+                warehouse_id=request.POST.get("warehouse_id"),
+                rows=[{"sku": sku, "quantity": quantity} for sku, quantity in zip(skus, quantities)],
+                purpose=request.POST.get("purpose"), recipient=request.POST.get("recipient"),
+                note=request.POST.get("note"), operator=request.user, request_id=request.POST.get("request_id"),
+            )
+            messages.success(request, f"出库单 {document.document_no} 已生成")
+            return redirect("outbound_document", document_id=document.id)
+        except (StockError, Warehouse.DoesNotExist) as exc:
+            messages.error(request, str(exc) if isinstance(exc, StockError) else "仓库不存在")
+    return render(request, "stock/manual_outbound.html", {
+        "active_nav": "manual_outbound", "warehouses": Warehouse.objects.filter(owner=request.user, is_active=True),
+        "request_id": uuid.uuid4(),
+    })
+
+
+@staff_required
+@require_GET
+def outbound_stock_search(request):
+    warehouse_id = request.GET.get("warehouse_id")
+    query = request.GET.get("q", "").strip()
+    if not warehouse_id or not warehouse_id.isdecimal() or not query:
+        return JsonResponse({"items": []})
+    rows = StockBalance.objects.select_related("item").filter(
+        warehouse_id=warehouse_id, warehouse__owner=request.user, warehouse__is_active=True,
+        item__sku__icontains=query, on_hand__gt=0,
+    ).order_by("item__sku")[:20]
+    return JsonResponse({"items": [{"sku": row.item.sku, "available": row.on_hand,
+                                    "unit_cost": str(row.avg_unit_cost) if row.avg_unit_cost is not None else None}
+                                   for row in rows]})
+
+
+@staff_required
+@require_GET
+def outbound_documents(request):
+    return render(request, "stock/outbound_documents.html", {
+        "active_nav": "manual_outbound",
+        "documents": OutboundDocument.objects.select_related("warehouse", "operator").filter(owner=request.user)[:200],
+    })
+
+
+@staff_required
+@require_GET
+def outbound_document(request, document_id):
+    document = get_object_or_404(OutboundDocument.objects.select_related("warehouse", "operator")
+                                 .prefetch_related("lines"), pk=document_id, owner=request.user)
+    return render(request, "stock/outbound_document.html", {"active_nav": "manual_outbound", "document": document})
 
 
 @staff_required
@@ -225,7 +378,21 @@ def skip_order_line(request, line_id):
     else:
         line.is_skipped = True
         line.save(update_fields=["is_skipped"])
-        messages.success(request, "已标记为不从自有仓出库；已出库记录不受影响")
+        messages.success(request, "已暂不处理")
+        return redirect(f"{reverse('orders')}?status=paused")
+    return redirect("orders")
+
+
+@staff_required
+@require_POST
+def resume_order_line(request, line_id):
+    line = get_object_or_404(OrderLine.objects.select_related("order"), pk=line_id, order__owner=request.user)
+    if line.order.status != ExternalOrder.Status.OPEN or not line.is_present:
+        messages.error(request, "订单已结束")
+    else:
+        line.is_skipped = False
+        line.save(update_fields=["is_skipped"])
+        messages.success(request, "已继续处理")
     return redirect("orders")
 
 

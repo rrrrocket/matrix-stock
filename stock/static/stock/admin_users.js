@@ -1,4 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("[data-dismiss-message]").forEach((button) => {
+    button.addEventListener("click", () => button.closest(".admin-message")?.remove());
+  });
   const dialog = document.getElementById("admin-confirm");
   if (!dialog) return;
 

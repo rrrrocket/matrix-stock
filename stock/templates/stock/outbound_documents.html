@@ -1,0 +1,5 @@
+{% extends 'stock/base.html' %}
+{% block content %}
+<div class="page-heading"><h1>出库单记录</h1><a class="button primary" href="{% url 'manual_outbound' %}">新建出库单</a></div>
+<section class="card panel"><div class="table-wrap"><table><thead><tr><th>出库单号</th><th>类型</th><th>仓库</th><th>用途</th><th class="number">数量</th><th class="number">成本总价</th><th>操作人</th><th>出库时间</th></tr></thead><tbody>{% for document in documents %}<tr><td><a href="{% url 'outbound_document' document.id %}">{{ document.document_no }}</a></td><td>{{ document.get_source_display }}</td><td>{{ document.warehouse.name }}</td><td>{{ document.purpose|default:'—' }}</td><td class="number">{{ document.total_quantity }}</td><td class="number">¥{{ document.total_amount }}</td><td>{{ document.operator.username|default:'系统' }}</td><td>{{ document.created_at|date:'Y-m-d H:i' }}</td></tr>{% empty %}<tr><td colspan="8" class="empty-cell">暂无出库单</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

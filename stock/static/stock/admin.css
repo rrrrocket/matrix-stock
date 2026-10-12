@@ -74,6 +74,8 @@ nav[aria-label="Breadcrumbs"] a { color: #5382c9; }
 .messagelist { margin: 0 0 18px; padding: 0; }
 .messagelist li { border: 1px solid #ccebdc; border-radius: 9px; background: #edfaf3; color: #1d8760; padding: 12px 15px; }
 .messagelist li.error { border-color: #f8d4d0; background: #fff3f1; color: #bb4e46; }
+.messagelist { position: fixed; top: 88px; right: 24px; z-index: 100; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 104px); overflow-y: auto; margin: 0; box-shadow: 0 12px 28px rgba(26,61,103,.12); }
+@media (max-width: 760px) { .messagelist { top: 16px; right: 16px; } }
 
 .stock-admin-eyebrow { color: #5382c9; font-size: 11px; font-weight: 750; letter-spacing: .13em; }
 .stock-admin-home-head { margin-bottom: 23px; }

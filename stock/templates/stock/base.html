@@ -4,19 +4,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Matrix Stock{% endblock %}</title>
-  <link rel="icon" type="image/svg+xml" href="{% static 'stock/favicon.svg' %}">
-  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261010-2">
-  <script defer src="{% static 'stock/app.js' %}"></script>
+  <title>Matrix Stock 库存管理</title>
+  <link rel="icon" type="image/svg+xml" href="{% static 'stock/matrix-stock-mark.svg' %}?v=5">
+  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261012-8">
+  <script defer src="{% static 'stock/app.js' %}?v=20261012-9"></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="{% url 'dashboard' %}"><img class="brand-mark" src="{% static 'stock/favicon.svg' %}" alt=""><span>Matrix <b>Stock</b></span></a>
+    <a class="brand" href="{% url 'dashboard' %}"><img class="brand-mark" src="{% static 'stock/matrix-stock-mark.svg' %}?v=5" alt=""><span>Matrix <b>Stock</b></span></a>
     {% if user.is_authenticated %}
     <nav class="nav" aria-label="主导航">
       <a class="{% if active_nav == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">概览</a>
       <a class="{% if active_nav == 'orders' %}active{% endif %}" href="{% url 'orders' %}">订单待处理</a>
-      <a class="{% if active_nav == 'inventory' %}active{% endif %}" href="{% url 'inventory' %}">自有仓库存</a>
+      <a class="{% if active_nav == 'inventory' %}active{% endif %}" href="{% url 'inventory' %}">仓库库存</a>
+      <a class="{% if active_nav == 'manual_outbound' %}active{% endif %}" href="{% url 'manual_outbound' %}">批量出库</a>
       <a class="{% if active_nav == 'movements' %}active{% endif %}" href="{% url 'movements' %}">出入库流水</a>
       <a class="{% if active_nav == 'warehouses' %}active{% endif %}" href="{% url 'warehouses' %}">仓库设置</a>
       {% if perms.auth.change_user %}<a href="{% url 'stock_admin_users' %}">用户管理</a>{% endif %}
@@ -25,7 +26,7 @@
     {% endif %}
   </header>
   <main class="page">
-    {% if messages %}<div class="flash-stack" role="status">{% for message in messages %}<div class="flash flash-{{ message.tags }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+    {% if messages %}<div class="flash-stack" role="status">{% for message in messages %}<div class="flash flash-{{ message.tags }}"><span>{{ message }}</span><button type="button" class="flash-close" data-dismiss-message aria-label="关闭提示">×</button></div>{% endfor %}</div>{% endif %}
     {% block content %}{% endblock %}
   </main>
 </body>
