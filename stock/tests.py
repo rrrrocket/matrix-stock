@@ -103,7 +103,7 @@ class StockFlowTests(TestCase):
         self.assertEqual(OutboundDocument.objects.count(), 1)
         self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 0)
 
-    def test_order_batch_rolls_back_if_second_row_has_no_cost(self):
+    def test_order_batch_allows_missing_cost_without_fake_total(self):
         first = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
         first.avg_unit_cost = Decimal("8.0000")
         first.save(update_fields=["avg_unit_cost"])
@@ -116,12 +116,53 @@ class StockFlowTests(TestCase):
             {"line_id": other_order.lines.get().pk, "warehouse_id": self.b.pk, "quantity": 1,
              "tracking_number": "YT-2", "operation_id": str(uuid.uuid4())},
         ]
+        documents, movements = record_batch_order_outbound(rows=rows, operator=self.user)
+        self.assertEqual(len(documents), 2)
+        self.assertEqual(len(movements), 2)
+        priced = next(document for document in documents if document.warehouse_id == self.a.pk)
+        unpriced = next(document for document in documents if document.warehouse_id == self.b.pk)
+        self.assertEqual(priced.total_amount, Decimal("8.00"))
+        self.assertIsNone(unpriced.total_amount)
+        self.assertIsNone(unpriced.lines.get().unit_cost)
+        self.assertIsNone(unpriced.lines.get().amount)
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(reverse("outbound_document", args=[unpriced.pk])), "未完整定价")
+        first.refresh_from_db()
+        self.assertEqual(first.on_hand, 2)
+        self.assertEqual(OutboundDocument.objects.count(), 2)
+        order.lines.get().refresh_from_db()
+        self.assertEqual(order.lines.get().outbound_quantity, 1)
+
+    def test_order_batch_still_rolls_back_if_stock_is_insufficient(self):
+        first_order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        second_payload = dict(self.payload, order_id="posting-2")
+        second_order, _ = upsert_external_order(second_payload, owner_id=self.user.pk)
+        rows = [
+            {"line_id": first_order.lines.get().pk, "warehouse_id": self.a.pk, "quantity": 1,
+             "tracking_number": "YT-1", "operation_id": str(uuid.uuid4())},
+            {"line_id": second_order.lines.get().pk, "warehouse_id": self.b.pk, "quantity": 5,
+             "tracking_number": "YT-2", "operation_id": str(uuid.uuid4())},
+        ]
         with self.assertRaises(StockError):
             record_batch_order_outbound(rows=rows, operator=self.user)
-        first.refresh_from_db()
-        self.assertEqual(first.on_hand, 3)
+        self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 3)
         self.assertFalse(OutboundDocument.objects.exists())
-        self.assertEqual(order.lines.get().outbound_quantity, 0)
+        self.assertEqual(first_order.lines.get().outbound_quantity, 0)
+
+    @patch("stock.views.send_outbound_callback", return_value=True)
+    def test_order_outbound_without_cost_still_calls_erp_callback(self, callback):
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("outbound", args=[order.lines.get().pk]), {
+            "warehouse_id": self.a.pk, "quantity": 1, "tracking_number": "YT-123",
+            "operation_id": str(uuid.uuid4()),
+        })
+        self.assertEqual(response.status_code, 302)
+        callback.assert_called_once()
+        document = OutboundDocument.objects.get()
+        self.assertIsNone(document.total_amount)
+        self.assertIsNone(document.lines.get().unit_cost)
+        self.assertEqual(order.lines.get().movements.get().tracking_number, "YT-123")
 
     def test_single_order_outbound_creates_document_with_cost_snapshot(self):
         balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")

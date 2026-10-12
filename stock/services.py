@@ -223,8 +223,9 @@ def _new_document(*, owner, warehouse, source, operator, purpose="", recipient="
 
 def _attach_document_line(document, movement, unit_cost):
     quantity = -movement.quantity_change
-    amount = _money(unit_cost * quantity)
-    if amount >= Decimal("10000000000000000") or document.total_amount + amount >= Decimal("10000000000000000"):
+    amount = _money(unit_cost * quantity) if unit_cost is not None else None
+    if amount is not None and (amount >= Decimal("10000000000000000") or
+                               (document.total_amount is not None and document.total_amount + amount >= Decimal("10000000000000000"))):
         raise StockError("出库金额超出允许范围")
     OutboundDocumentLine.objects.create(
         document=document, movement=movement, order_line=movement.order_line,
@@ -232,7 +233,10 @@ def _attach_document_line(document, movement, unit_cost):
         amount=amount, tracking_number=movement.tracking_number,
     )
     document.total_quantity += quantity
-    document.total_amount += amount
+    if amount is None:
+        document.total_amount = None
+    elif document.total_amount is not None:
+        document.total_amount += amount
 
 
 @transaction.atomic
@@ -253,7 +257,7 @@ def record_order_outbound_document(*, line_id, warehouse_id, quantity, tracking_
     ).first()
     if not balance:
         raise StockError("所选仓库没有该货号库存")
-    cost = parse_cost(balance.avg_unit_cost, required=True)
+    cost = parse_cost(balance.avg_unit_cost)
     movement = record_outbound(line_id=line_id, warehouse_id=warehouse_id, quantity=quantity,
                                tracking_number=tracking_number, operator=operator, operation_id=operation_id)
     document = _new_document(owner=operator, warehouse=movement.warehouse,
@@ -304,7 +308,10 @@ def record_batch_order_outbound(*, rows, operator):
             line.document = target
             line.save(update_fields=["document"])
             target.total_quantity += document.total_quantity
-            target.total_amount += document.total_amount
+            if target.total_amount is None or document.total_amount is None:
+                target.total_amount = None
+            else:
+                target.total_amount += document.total_amount
             target.save(update_fields=["total_quantity", "total_amount"])
             document.delete()
         else:

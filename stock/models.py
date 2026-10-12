@@ -145,7 +145,7 @@ class OutboundDocument(models.Model):
     recipient = models.CharField(max_length=200, blank=True)
     note = models.CharField(max_length=500, blank=True)
     total_quantity = models.PositiveIntegerField(default=0)
-    total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0, null=True)
     operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -159,8 +159,8 @@ class OutboundDocumentLine(models.Model):
     order_line = models.ForeignKey(OrderLine, on_delete=models.PROTECT, null=True, blank=True)
     sku = models.CharField(max_length=150)
     quantity = models.PositiveIntegerField()
-    unit_cost = models.DecimalField(max_digits=14, decimal_places=4)
-    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    unit_cost = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    amount = models.DecimalField(max_digits=18, decimal_places=2, null=True, blank=True)
     tracking_number = models.CharField(max_length=200, blank=True)
 
 
