@@ -20,19 +20,20 @@ document.addEventListener("DOMContentLoaded", () => {
     reopen: (name) => `将 ${name} 恢复为待审核状态？`,
   };
 
-  document.querySelectorAll("[data-admin-action]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const action = button.dataset.adminAction;
-      if (!Object.hasOwn(titles, action)) return;
-      document.getElementById("admin-confirm-title").textContent = titles[action];
-      document.getElementById("admin-confirm-description").textContent = descriptions[action](button.dataset.username);
-      document.getElementById("admin-confirm-action").value = action;
-      document.getElementById("admin-confirm-user-id").value = button.dataset.userId;
-      const submit = document.getElementById("admin-confirm-submit");
-      submit.textContent = action === "approve" ? "通过" : action === "reject" ? "拒绝" : "确认";
-      submit.classList.toggle("danger", action === "reject" || action === "disable");
-      dialog.showModal();
-    });
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest("[data-admin-action]");
+    if (!(button instanceof HTMLButtonElement)) return;
+    const action = button.dataset.adminAction;
+    if (!Object.hasOwn(titles, action)) return;
+    document.getElementById("admin-confirm-title").textContent = titles[action];
+    document.getElementById("admin-confirm-description").textContent = descriptions[action](button.dataset.username);
+    document.getElementById("admin-confirm-action").value = action;
+    document.getElementById("admin-confirm-user-id").value = button.dataset.userId;
+    const submit = document.getElementById("admin-confirm-submit");
+    submit.textContent = action === "approve" ? "通过" : action === "reject" ? "拒绝" : "确认";
+    submit.classList.toggle("danger", action === "reject" || action === "disable");
+    dialog.showModal();
   });
   dialog.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => dialog.close()));
 });

@@ -6,9 +6,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Matrix Stock 库存管理</title>
   <link rel="icon" type="image/svg+xml" href="{% static 'stock/matrix-stock-mark.svg' %}?v=5">
-  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261012-4">
+  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261016-1">
   <link rel="stylesheet" href="{% static 'stock/admin_users.css' %}?v=20261012-1">
-  <script defer src="{% static 'stock/admin_users.js' %}?v=20261012-1"></script>
+  <script defer src="{% static 'stock/admin_users.js' %}?v=20261016-1"></script>
+  <script defer src="{% static 'stock/live_search.js' %}?v=20261016-1"></script>
 </head>
 <body class="admin-workbench-body">
   <header class="admin-topbar">
@@ -32,12 +33,11 @@
 
     <section class="admin-panel" id="pending" aria-labelledby="pending-title">
       <div class="admin-panel-heading"><h2 id="pending-title">待审核注册</h2><span class="admin-count">{{ pending_total }}</span></div>
-      <form class="admin-search" method="get" action="{% url 'stock_admin_users' %}#pending">
+      <form class="admin-search" method="get" action="{% url 'stock_admin_users' %}#pending" data-live-search data-live-target="pending-results" data-live-reset-page="pending_page">
         <input type="search" name="pending_q" value="{{ pending_search }}" placeholder="搜索用户名或邮箱" aria-label="搜索待审核注册">
-        {% if users_search %}<input type="hidden" name="users_q" value="{{ users_search }}">{% endif %}
         <button type="submit">搜索</button>
       </form>
-      <div class="admin-table-wrap"><table class="admin-table">
+      <div id="pending-results" aria-live="polite"><div class="admin-table-wrap"><table class="admin-table">
         <thead><tr><th>用户名</th><th>邮箱</th><th>注册时间</th><th class="admin-actions-column">操作</th></tr></thead>
         <tbody>
           {% for member in pending_page %}
@@ -47,17 +47,16 @@
           {% endfor %}
         </tbody>
       </table></div>
-      <div class="admin-pagination"><span>共 {{ pending_page.paginator.count }} 条</span><div>{% if pending_page.has_previous %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.previous_page_number }}&users_page={{ users_page.number }}#pending" aria-label="待审核上一页">‹</a>{% endif %}<span>{{ pending_page.number }} / {{ pending_page.paginator.num_pages }}</span>{% if pending_page.has_next %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.next_page_number }}&users_page={{ users_page.number }}#pending" aria-label="待审核下一页">›</a>{% endif %}</div></div>
+      <div class="admin-pagination"><span>共 {{ pending_page.paginator.count }} 条</span><div>{% if pending_page.has_previous %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.previous_page_number }}&users_page={{ users_page.number }}#pending" aria-label="待审核上一页">‹</a>{% endif %}<span>{{ pending_page.number }} / {{ pending_page.paginator.num_pages }}</span>{% if pending_page.has_next %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.next_page_number }}&users_page={{ users_page.number }}#pending" aria-label="待审核下一页">›</a>{% endif %}</div></div></div>
     </section>
 
     <section class="admin-panel" id="users" aria-labelledby="users-title">
       <div class="admin-panel-heading"><h2 id="users-title">全部用户</h2><span class="admin-count">{{ users_page.paginator.count }}</span></div>
-      <form class="admin-search" method="get" action="{% url 'stock_admin_users' %}#users">
+      <form class="admin-search" method="get" action="{% url 'stock_admin_users' %}#users" data-live-search data-live-target="users-results" data-live-reset-page="users_page">
         <input type="search" name="users_q" value="{{ users_search }}" placeholder="搜索用户名或邮箱" aria-label="搜索全部用户">
-        {% if pending_search %}<input type="hidden" name="pending_q" value="{{ pending_search }}">{% endif %}
         <button type="submit">搜索</button>
       </form>
-      <div class="admin-table-wrap"><table class="admin-table">
+      <div id="users-results" aria-live="polite"><div class="admin-table-wrap"><table class="admin-table">
         <thead><tr><th>用户名</th><th>邮箱</th><th>审核状态</th><th>权限</th><th>注册时间</th><th class="admin-actions-column">操作</th></tr></thead>
         <tbody>
           {% for member in users_page %}
@@ -73,7 +72,7 @@
           {% endfor %}
         </tbody>
       </table></div>
-      <div class="admin-pagination"><span>共 {{ users_page.paginator.count }} 条</span><div>{% if users_page.has_previous %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.number }}&users_page={{ users_page.previous_page_number }}#users" aria-label="用户上一页">‹</a>{% endif %}<span>{{ users_page.number }} / {{ users_page.paginator.num_pages }}</span>{% if users_page.has_next %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.number }}&users_page={{ users_page.next_page_number }}#users" aria-label="用户下一页">›</a>{% endif %}</div></div>
+      <div class="admin-pagination"><span>共 {{ users_page.paginator.count }} 条</span><div>{% if users_page.has_previous %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.number }}&users_page={{ users_page.previous_page_number }}#users" aria-label="用户上一页">‹</a>{% endif %}<span>{{ users_page.number }} / {{ users_page.paginator.num_pages }}</span>{% if users_page.has_next %}<a href="?pending_q={{ pending_search|urlencode }}&users_q={{ users_search|urlencode }}&pending_page={{ pending_page.number }}&users_page={{ users_page.next_page_number }}#users" aria-label="用户下一页">›</a>{% endif %}</div></div></div>
     </section>
   </main>
 

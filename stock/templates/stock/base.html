@@ -6,8 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Matrix Stock 库存管理</title>
   <link rel="icon" type="image/svg+xml" href="{% static 'stock/matrix-stock-mark.svg' %}?v=5">
-  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261012-8">
-  <script defer src="{% static 'stock/app.js' %}?v=20261012-9"></script>
+  <link rel="stylesheet" href="{% static 'stock/app.css' %}?v=20261016-3">
+  <script defer src="{% static 'stock/app.js' %}?v=20261016-2"></script>
+  <script defer src="{% static 'stock/live_search.js' %}?v=20261016-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -19,8 +20,8 @@
       <a class="{% if active_nav == 'inventory' %}active{% endif %}" href="{% url 'inventory' %}">仓库库存</a>
       <a class="{% if active_nav == 'manual_outbound' %}active{% endif %}" href="{% url 'manual_outbound' %}">批量出库</a>
       <a class="{% if active_nav == 'movements' %}active{% endif %}" href="{% url 'movements' %}">出入库流水</a>
-      <a class="{% if active_nav == 'warehouses' %}active{% endif %}" href="{% url 'warehouses' %}">仓库设置</a>
       {% if erp_callback_failed_count %}<a class="nav-callback-alert" href="{% url 'movements' %}?callback=failed">ERP 回填失败 <span>{{ erp_callback_failed_count }}</span></a>{% endif %}
+      <a class="{% if active_nav == 'warehouses' %}active{% endif %}" href="{% url 'warehouses' %}">仓库设置</a>
       {% if perms.auth.change_user %}<a href="{% url 'stock_admin_users' %}">用户管理</a>{% endif %}
     </nav>
     <div class="user-actions"><span>{{ user.username }}</span><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="text-button" type="submit">退出</button></form></div>
