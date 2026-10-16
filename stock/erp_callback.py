@@ -3,6 +3,7 @@
 import json
 import os
 from datetime import timedelta
+from urllib.error import HTTPError
 from urllib import request
 
 from django.db.models import Q
@@ -11,9 +12,9 @@ from django.utils import timezone
 from .models import StockMovement
 
 
-def send_outbound_callback(movement_id):
+def send_outbound_callback(movement_id, *, force=False):
     movement = StockMovement.objects.select_related('order_line__order').get(pk=movement_id)
-    if movement.erp_callback_sent_at:
+    if movement.erp_callback_sent_at and not force:
         return True
     if movement.movement_type != StockMovement.Type.OUTBOUND or not movement.order_line_id or not movement.tracking_number:
         return False
@@ -40,12 +41,32 @@ def send_outbound_callback(movement_id):
         with request.urlopen(outgoing, timeout=5) as response:
             if response.status != 200:
                 raise RuntimeError(f'ERP 回填返回 HTTP {response.status}')
+            body = response.read(4097)
+            if len(body) > 4096:
+                raise RuntimeError('ERP 回填响应过大，无法确认结果')
+            try:
+                confirmation = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                raise RuntimeError('ERP 回填未返回有效 JSON 确认') from None
+            if (not isinstance(confirmation, dict) or type(confirmation.get('id')) is not int
+                    or confirmation['id'] <= 0 or type(confirmation.get('created')) is not bool):
+                raise RuntimeError('ERP 回填响应缺少有效确认')
     except (ValueError, OSError, RuntimeError) as exc:
+        error = str(exc)
+        if isinstance(exc, HTTPError):
+            try:
+                body = exc.read(1024).decode('utf-8', errors='replace')
+                detail = json.loads(body).get('detail')
+                if detail:
+                    error = f'ERP 回填 HTTP {exc.code}: {detail}'
+            except (ValueError, AttributeError, OSError):
+                pass
         attempts = movement.erp_callback_attempts + 1
         movement.erp_callback_attempts = attempts
+        movement.erp_callback_sent_at = None
         movement.erp_callback_next_attempt_at = timezone.now() + timedelta(seconds=min(30 * 2 ** min(attempts, 7), 3600))
-        movement.erp_callback_error = str(exc)[:500]
-        movement.save(update_fields=['erp_callback_attempts', 'erp_callback_next_attempt_at', 'erp_callback_error'])
+        movement.erp_callback_error = error[:500]
+        movement.save(update_fields=['erp_callback_sent_at', 'erp_callback_attempts', 'erp_callback_next_attempt_at', 'erp_callback_error'])
         return False
     movement.erp_callback_sent_at = timezone.now()
     movement.erp_callback_next_attempt_at = None

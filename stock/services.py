@@ -1,5 +1,6 @@
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from datetime import date
 from datetime import datetime
 from io import BytesIO, StringIO
 import csv
@@ -10,6 +11,7 @@ from urllib.parse import urlsplit
 from openpyxl import load_workbook
 from django.db import transaction
 from django.db.models import F, Sum
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from .models import ExternalOrder, OrderAlert, OrderLine, OutboundDocument, OutboundDocumentLine, StockBalance, StockItem, StockMovement, Warehouse
@@ -56,8 +58,17 @@ def _money(value):
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def parse_expiry_date(value):
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        raise StockError("过期时间格式无效") from None
+
+
 @transaction.atomic
-def record_inbound(*, warehouse_id, sku, quantity, product_name="", note="", operator=None, movement_type=StockMovement.Type.INBOUND, unit_cost=None):
+def record_inbound(*, warehouse_id, sku, quantity, product_name="", note="", operator=None, movement_type=StockMovement.Type.INBOUND, unit_cost=None, expires_on=None):
     warehouse_id = _positive_int(warehouse_id, "仓库ID")
     quantity = _positive_int(quantity, "入库数量")
     sku = normalize_sku(sku)
@@ -67,6 +78,14 @@ def record_inbound(*, warehouse_id, sku, quantity, product_name="", note="", ope
         item.name = str(product_name).strip()[:255]
         item.save(update_fields=["name"])
     balance, _ = StockBalance.objects.select_for_update().get_or_create(warehouse=warehouse, item=item)
+    expiry_date = parse_expiry_date(expires_on)
+    if expiry_date and balance.expires_on != expiry_date:
+        balance.expires_on = expiry_date
+        balance.save(update_fields=["expires_on", "updated_at"])
+        balance.expiry_alerts.all().delete()
+    if movement_type == StockMovement.Type.INBOUND and str(note or "").strip():
+        balance.note = str(note).strip()[:500]
+        balance.save(update_fields=["note", "updated_at"])
     incoming_cost = parse_cost(unit_cost) if unit_cost is not None else item.reference_cost
     if incoming_cost is not None:
         if unit_cost is not None and str(unit_cost).strip() and item.reference_cost != incoming_cost:
@@ -78,7 +97,7 @@ def record_inbound(*, warehouse_id, sku, quantity, product_name="", note="", ope
         balance.avg_unit_cost = (old_value + incoming_cost * quantity) / (balance.on_hand + quantity)
         balance.avg_unit_cost = balance.avg_unit_cost.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
         balance.save(update_fields=["avg_unit_cost"])
-    StockBalance.objects.filter(pk=balance.pk).update(on_hand=F("on_hand") + quantity)
+    StockBalance.objects.filter(pk=balance.pk).update(on_hand=F("on_hand") + quantity, updated_at=timezone.now())
     balance.refresh_from_db()
     movement = StockMovement.objects.create(
         warehouse=warehouse, item=item, movement_type=movement_type,
@@ -107,10 +126,10 @@ def record_batch_inbound(*, warehouse_id, rows, default_quantity, operator):
         note = str(row.get("note") or "").strip()
         if len(note) > 500:
             raise StockError("备注不能超过 500 字符")
-        parsed.append((sku, quantity, note, row.get("unit_cost")))
+        parsed.append((sku, quantity, note, row.get("unit_cost"), parse_expiry_date(row.get("expires_on"))))
     return [
-        record_inbound(warehouse_id=warehouse_id, sku=sku, quantity=quantity, note=note, operator=operator, unit_cost=unit_cost)
-        for sku, quantity, note, unit_cost in parsed
+        record_inbound(warehouse_id=warehouse_id, sku=sku, quantity=quantity, note=note, operator=operator, unit_cost=unit_cost, expires_on=expires_on)
+        for sku, quantity, note, unit_cost, expires_on in parsed
     ]
 
 
@@ -240,40 +259,13 @@ def _attach_document_line(document, movement, unit_cost):
 
 
 @transaction.atomic
-def record_order_outbound_document(*, line_id, warehouse_id, quantity, tracking_number, operator, operation_id):
-    line_id = _positive_int(line_id, "订单商品ID")
-    try:
-        operation_id = UUID(str(operation_id))
-    except (ValueError, TypeError, AttributeError):
-        raise StockError("无效的操作编号") from None
-    previous = StockMovement.objects.filter(operation_id=operation_id).first()
-    if previous:
-        movement = record_outbound(line_id=line_id, warehouse_id=warehouse_id, quantity=quantity,
-                                   tracking_number=tracking_number, operator=operator, operation_id=operation_id)
-        return movement.document_line.document, movement
-    line = OrderLine.objects.select_related("order").get(pk=line_id, order__owner=operator)
-    balance = StockBalance.objects.select_for_update().filter(
-        warehouse_id=warehouse_id, warehouse__owner=operator, item__owner=operator, item__sku=line.sku,
-    ).first()
-    if not balance:
-        raise StockError("所选仓库没有该货号库存")
-    cost = parse_cost(balance.avg_unit_cost)
-    movement = record_outbound(line_id=line_id, warehouse_id=warehouse_id, quantity=quantity,
-                               tracking_number=tracking_number, operator=operator, operation_id=operation_id)
-    document = _new_document(owner=operator, warehouse=movement.warehouse,
-                             source=OutboundDocument.Source.ORDER, operator=operator)
-    _attach_document_line(document, movement, cost)
-    document.save(update_fields=["total_quantity", "total_amount"])
-    return document, movement
-
-
-@transaction.atomic
 def record_batch_order_outbound(*, rows, operator):
     if not isinstance(rows, list) or not 1 <= len(rows) <= 100:
         raise StockError("每次请选择 1 至 100 条订单商品")
     if any(not isinstance(row, dict) for row in rows):
         raise StockError("订单商品格式无效")
-    if len({str(row.get("line_id")) for row in rows}) != len(rows):
+    line_ids = [_positive_int(row.get("line_id"), "订单商品ID") for row in rows]
+    if len(set(line_ids)) != len(rows):
         raise StockError("同一订单商品不能重复选择")
     try:
         operation_ids = [UUID(str(row.get("operation_id"))) for row in rows]
@@ -284,40 +276,15 @@ def record_batch_order_outbound(*, rows, operator):
     previous = [StockMovement.objects.filter(operation_id=operation_id).first() for operation_id in operation_ids]
     if any(previous) and not all(previous):
         raise StockError("部分订单已出库，请刷新后重新选择")
-    if all(previous):
-        documents = {}
-        for row, movement in zip(rows, previous):
-            document, _ = record_order_outbound_document(
-                line_id=row.get("line_id"), warehouse_id=row.get("warehouse_id"),
-                quantity=row.get("quantity"), tracking_number=row.get("tracking_number"),
-                operator=operator, operation_id=row.get("operation_id"))
-            documents[document.pk] = document
-        return list(documents.values()), previous
     movements = []
-    documents = {}
-    for row in rows:
-        document, movement = record_order_outbound_document(
-            line_id=row.get("line_id"), warehouse_id=row.get("warehouse_id"),
+    for line_id, row in zip(line_ids, rows):
+        movement = record_outbound(
+            line_id=line_id, warehouse_id=row.get("warehouse_id"),
             quantity=row.get("quantity"), tracking_number=row.get("tracking_number"),
             operator=operator, operation_id=row.get("operation_id"),
         )
-        # Merge this transaction's individual documents into one document per warehouse.
-        if movement.warehouse_id in documents and documents[movement.warehouse_id].pk != document.pk:
-            target = documents[movement.warehouse_id]
-            line = movement.document_line
-            line.document = target
-            line.save(update_fields=["document"])
-            target.total_quantity += document.total_quantity
-            if target.total_amount is None or document.total_amount is None:
-                target.total_amount = None
-            else:
-                target.total_amount += document.total_amount
-            target.save(update_fields=["total_quantity", "total_amount"])
-            document.delete()
-        else:
-            documents[movement.warehouse_id] = document
         movements.append(movement)
-    return list(documents.values()), movements
+    return movements
 
 
 @transaction.atomic

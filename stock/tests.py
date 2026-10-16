@@ -6,6 +6,7 @@ import uuid
 from decimal import Decimal
 from io import BytesIO
 from io import StringIO
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import MagicMock, patch
 
@@ -18,9 +19,9 @@ from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from openpyxl import Workbook
 
-from .models import ExternalOrder, OrderAlert, OrderLine, OutboundDocument, StockBalance, StockItem, StockMovement, Warehouse
-from .notifications import dispatch_pending_alerts
-from .services import StockError, adjust_stock, import_opening_stock, record_batch_order_outbound, record_inbound, record_manual_outbound, record_order_outbound_document, record_outbound, upsert_external_order
+from .models import ExternalOrder, OrderAlert, OrderLine, OutboundDocument, StockBalance, StockExpiryAlert, StockItem, StockMovement, StockNotificationSettings, Warehouse
+from .notifications import dispatch_pending_alerts, dispatch_expiry_alerts, enqueue_expiry_alerts, expiry_send_date
+from .services import StockError, adjust_stock, import_opening_stock, record_batch_order_outbound, record_inbound, record_manual_outbound, record_outbound, upsert_external_order
 from .erp_callback import send_outbound_callback
 
 
@@ -80,7 +81,7 @@ class StockFlowTests(TestCase):
                 purpose="线下销售", recipient="", note="", operator=self.user, request_id=uuid.uuid4())
         self.assertFalse(OutboundDocument.objects.exists())
 
-    def test_order_batch_documents_group_by_warehouse_and_keep_tracking(self):
+    def test_order_batch_records_movements_without_documents(self):
         for warehouse in (self.a, self.b):
             balance = StockBalance.objects.get(warehouse=warehouse, item__sku="SKU-1")
             balance.avg_unit_cost = Decimal("7.2500")
@@ -94,16 +95,15 @@ class StockFlowTests(TestCase):
             {"line_id": second_order.lines.get().pk, "warehouse_id": self.a.pk, "quantity": 1,
              "tracking_number": "YT-2", "operation_id": str(uuid.uuid4())},
         ]
-        documents, movements = record_batch_order_outbound(rows=rows, operator=self.user)
-        self.assertEqual(len(documents), 1)
-        self.assertEqual((documents[0].total_quantity, documents[0].total_amount), (3, Decimal("21.75")))
-        self.assertEqual(set(documents[0].lines.values_list("tracking_number", flat=True)), {"YT-1", "YT-2"})
-        again, _ = record_batch_order_outbound(rows=rows, operator=self.user)
-        self.assertEqual([doc.pk for doc in again], [documents[0].pk])
-        self.assertEqual(OutboundDocument.objects.count(), 1)
+        movements = record_batch_order_outbound(rows=rows, operator=self.user)
+        self.assertEqual(len(movements), 2)
+        self.assertEqual({movement.tracking_number for movement in movements}, {"YT-1", "YT-2"})
+        again = record_batch_order_outbound(rows=rows, operator=self.user)
+        self.assertEqual([movement.pk for movement in again], [movement.pk for movement in movements])
+        self.assertFalse(OutboundDocument.objects.exists())
         self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 0)
 
-    def test_order_batch_allows_missing_cost_without_fake_total(self):
+    def test_order_batch_allows_missing_cost_without_documents(self):
         first = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
         first.avg_unit_cost = Decimal("8.0000")
         first.save(update_fields=["avg_unit_cost"])
@@ -116,21 +116,11 @@ class StockFlowTests(TestCase):
             {"line_id": other_order.lines.get().pk, "warehouse_id": self.b.pk, "quantity": 1,
              "tracking_number": "YT-2", "operation_id": str(uuid.uuid4())},
         ]
-        documents, movements = record_batch_order_outbound(rows=rows, operator=self.user)
-        self.assertEqual(len(documents), 2)
+        movements = record_batch_order_outbound(rows=rows, operator=self.user)
         self.assertEqual(len(movements), 2)
-        priced = next(document for document in documents if document.warehouse_id == self.a.pk)
-        unpriced = next(document for document in documents if document.warehouse_id == self.b.pk)
-        self.assertEqual(priced.total_amount, Decimal("8.00"))
-        self.assertIsNone(unpriced.total_amount)
-        self.assertIsNone(unpriced.lines.get().unit_cost)
-        self.assertIsNone(unpriced.lines.get().amount)
-        self.client.force_login(self.user)
-        self.assertContains(self.client.get(reverse("outbound_document", args=[unpriced.pk])), "未完整定价")
+        self.assertFalse(OutboundDocument.objects.exists())
         first.refresh_from_db()
         self.assertEqual(first.on_hand, 2)
-        self.assertEqual(OutboundDocument.objects.count(), 2)
-        order.lines.get().refresh_from_db()
         self.assertEqual(order.lines.get().outbound_quantity, 1)
 
     def test_order_batch_still_rolls_back_if_stock_is_insufficient(self):
@@ -158,28 +148,44 @@ class StockFlowTests(TestCase):
             "operation_id": str(uuid.uuid4()),
         })
         self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("orders"))
         callback.assert_called_once()
-        document = OutboundDocument.objects.get()
-        self.assertIsNone(document.total_amount)
-        self.assertIsNone(document.lines.get().unit_cost)
+        self.assertFalse(OutboundDocument.objects.exists())
         self.assertEqual(order.lines.get().movements.get().tracking_number, "YT-123")
 
-    def test_single_order_outbound_creates_document_with_cost_snapshot(self):
+    @patch("stock.views.send_outbound_callback", return_value=True)
+    def test_order_page_batch_outbound_does_not_create_document(self, callback):
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        second_payload = dict(self.payload, order_id="posting-2")
+        second_order, _ = upsert_external_order(second_payload, owner_id=self.user.pk)
+        rows = [
+            {"line_id": order.lines.get().pk, "warehouse_id": self.a.pk, "quantity": 1,
+             "tracking_number": "YT-1", "operation_id": str(uuid.uuid4())},
+            {"line_id": second_order.lines.get().pk, "warehouse_id": self.a.pk, "quantity": 1,
+             "tracking_number": "YT-2", "operation_id": str(uuid.uuid4())},
+        ]
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("batch_order_outbound"), {"rows": json.dumps(rows)})
+        self.assertRedirects(response, reverse("orders"))
+        self.assertEqual(callback.call_count, 2)
+        self.assertFalse(OutboundDocument.objects.exists())
+        self.assertEqual(StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1").on_hand, 1)
+
+    def test_single_order_outbound_does_not_create_document(self):
         balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
         balance.avg_unit_cost = Decimal("3.3333")
         balance.save(update_fields=["avg_unit_cost"])
         order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
         operation_id = uuid.uuid4()
-        document, movement = record_order_outbound_document(line_id=order.lines.get().pk,
+        movement = record_outbound(line_id=order.lines.get().pk,
             warehouse_id=self.a.pk, quantity=3, tracking_number="YT-123", operator=self.user,
             operation_id=operation_id)
-        self.assertEqual(document.total_amount, Decimal("10.00"))
-        self.assertEqual(document.lines.get().tracking_number, "YT-123")
-        self.assertEqual(document.lines.get().movement, movement)
-        again, _ = record_order_outbound_document(line_id=order.lines.get().pk,
+        self.assertFalse(OutboundDocument.objects.exists())
+        self.assertEqual(movement.tracking_number, "YT-123")
+        again = record_outbound(line_id=order.lines.get().pk,
             warehouse_id=self.a.pk, quantity=3, tracking_number="YT-123", operator=self.user,
             operation_id=operation_id)
-        self.assertEqual(again.pk, document.pk)
+        self.assertEqual(again.pk, movement.pk)
 
     def test_manual_outbound_search_and_document_are_owner_scoped(self):
         self.client.force_login(self.user)
@@ -229,12 +235,178 @@ class StockFlowTests(TestCase):
         ).exists())
         balance = next(row for row in self.client.get(reverse("inventory")).context["balances"]
                        if row.item.sku == "SKU-NEW-INBOUND")
-        self.assertEqual(balance.latest_inbound_note, "人工入库测试")
+        self.assertEqual(balance.note, "人工入库测试")
         record_inbound(warehouse_id=self.a.id, sku="SKU-NEW-INBOUND", quantity=1,
                        note="第二次入库备注", operator=self.user)
         balance = next(row for row in self.client.get(reverse("inventory")).context["balances"]
                        if row.item.sku == "SKU-NEW-INBOUND")
-        self.assertEqual(balance.latest_inbound_note, "第二次入库备注")
+        self.assertEqual(balance.note, "第二次入库备注")
+
+    def test_inventory_note_and_expiry_can_be_saved_inline_and_cleared(self):
+        self.client.force_login(self.user)
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        note_url = reverse("update_inventory_note", args=[balance.pk])
+        expiry_url = reverse("update_inventory_expiry", args=[balance.pk])
+        response = self.client.post(note_url, {"note": "  货架 A  "}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(response.json()["note"], "货架 A")
+        self.assertEqual(self.client.post(note_url, {"note": "x" * 501}, HTTP_X_REQUESTED_WITH="XMLHttpRequest").status_code, 400)
+        self.assertEqual(self.client.post(expiry_url, {"expires_on": "invalid"}, HTTP_X_REQUESTED_WITH="XMLHttpRequest").status_code, 400)
+        response = self.client.post(expiry_url, {"expires_on": "2026-11-30"}, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(response.json()["expires_on"], "2026-11-30")
+        self.assertEqual(self.client.post(note_url, {"note": "覆盖", "expected_note": "旧备注"},
+                                          HTTP_X_REQUESTED_WITH="XMLHttpRequest").status_code, 409)
+        self.assertEqual(self.client.post(expiry_url, {"expires_on": "2027-01-01", "expected_expiry": ""},
+                                          HTTP_X_REQUESTED_WITH="XMLHttpRequest").status_code, 409)
+        balance.refresh_from_db()
+        self.assertEqual(balance.note, "货架 A")
+        self.assertEqual(balance.expires_on.isoformat(), "2026-11-30")
+        self.assertContains(self.client.get(reverse("inventory"), {"q": "货架 A"}), "SKU-1")
+        self.client.post(note_url, {"note": ""})
+        self.client.post(expiry_url, {"expires_on": ""})
+        balance.refresh_from_db()
+        self.assertEqual(balance.note, "")
+        self.assertIsNone(balance.expires_on)
+
+    def test_batch_inbound_expiry_defaults_to_none_and_accepts_date(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("batch_inbound"), {
+            "warehouse_id": self.a.pk, "default_quantity": 1,
+            "sku": ["DATE-1", "DATE-2"], "quantity": ["", ""],
+            "unit_cost": ["", ""], "note": ["", ""], "expires_on": ["", "2026-12-31"],
+        })
+        self.assertRedirects(response, reverse("inventory"))
+        self.assertIsNone(StockBalance.objects.get(item__sku="DATE-1").expires_on)
+        self.assertEqual(StockBalance.objects.get(item__sku="DATE-2").expires_on.isoformat(), "2026-12-31")
+
+    def test_expiry_reminders_send_each_channel_once_and_retry_failures(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.expires_on = timezone.localdate() + timedelta(days=5)
+        balance.save(update_fields=["expires_on"])
+        StockNotificationSettings.objects.create(
+            owner=self.user, expiry_reminder_days="7,3,1",
+            feishu_webhook="https://open.feishu.cn/open-apis/bot/v2/hook/test",
+            wecom_webhook="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+        )
+        self.assertEqual(enqueue_expiry_alerts(), 2)
+        self.assertEqual(enqueue_expiry_alerts(), 0)
+        with patch("stock.notifications.expiry_send_date", return_value=timezone.localdate()), patch("stock.notifications._send_feishu") as feishu, patch("stock.notifications._send_wecom", side_effect=RuntimeError("暂时失败")) as wecom:
+            self.assertEqual(dispatch_expiry_alerts(), 1)
+            feishu.assert_called_once()
+            wecom.assert_called_once()
+        failed = StockExpiryAlert.objects.get(balance=balance, channel="wecom", reminder_days=7)
+        self.assertEqual(failed.status, StockExpiryAlert.Status.PENDING)
+        failed.next_attempt_at = None
+        failed.save(update_fields=["next_attempt_at"])
+        with patch("stock.notifications.expiry_send_date", return_value=timezone.localdate()), patch("stock.notifications._send_wecom") as wecom:
+            self.assertEqual(dispatch_expiry_alerts(), 1)
+            wecom.assert_called_once()
+        with patch("stock.notifications.expiry_send_date", return_value=timezone.localdate()):
+            self.assertEqual(dispatch_expiry_alerts(), 0)
+        self.client.force_login(self.user)
+        self.client.post(reverse("update_inventory_expiry", args=[balance.pk]), {"expires_on": ""})
+        self.assertFalse(StockExpiryAlert.objects.filter(balance=balance).exists())
+
+    def test_notification_settings_validate_webhooks_and_keep_secret(self):
+        self.client.force_login(self.user)
+        url = reverse("update_notification_settings")
+        self.client.post(url, {"expiry_reminder_days": "7,3,1", "feishu_webhook": "http://localhost/bot",
+                               "wecom_webhook": "", "feishu_secret": "secret"})
+        self.assertFalse(StockNotificationSettings.objects.filter(owner=self.user).exists())
+        self.client.post(url, {"expiry_reminder_days": "7天/3天/1天",
+                               "feishu_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/test",
+                               "wecom_webhook": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+                               "feishu_secret": "secret"})
+        settings_row = StockNotificationSettings.objects.get(owner=self.user)
+        self.assertEqual(settings_row.expiry_reminder_days, "7,3,1")
+        self.assertEqual(settings_row.feishu_secret, "secret")
+        self.client.post(url, {"expiry_reminder_days": "14,7,3,1", "feishu_webhook": settings_row.feishu_webhook,
+                               "wecom_webhook": settings_row.wecom_webhook, "feishu_secret": ""})
+        settings_row.refresh_from_db()
+        self.assertEqual(settings_row.feishu_secret, "secret")
+        self.assertContains(self.client.get(reverse("warehouses")), 'value="14,7,3,1"')
+        self.client.post(url, {"expiry_reminder_days": "7,abc", "feishu_webhook": settings_row.feishu_webhook,
+                               "wecom_webhook": settings_row.wecom_webhook})
+        settings_row.refresh_from_db()
+        self.assertEqual(settings_row.expiry_reminder_days, "14,7,3,1")
+
+    def test_expiry_reminders_progress_through_seven_three_one_day_stages(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.expires_on = today + timedelta(days=7)
+        balance.save(update_fields=["expires_on"])
+        StockNotificationSettings.objects.create(
+            owner=self.user, expiry_reminder_days="7,3,1",
+            feishu_webhook="https://open.feishu.cn/open-apis/bot/v2/hook/test",
+        )
+        with patch("stock.notifications._send_feishu") as send:
+            for offset, expected_stage in ((0, 7), (2, 7), (4, 3), (5, 3), (6, 1)):
+                check_date = today + timedelta(days=offset)
+                with patch("stock.notifications.timezone.localdate", return_value=check_date), patch("stock.notifications.expiry_send_date", return_value=check_date):
+                    queued = enqueue_expiry_alerts(check_date)
+                    self.assertEqual(queued, 0 if offset in (2, 5) else 1)
+                    self.assertEqual(dispatch_expiry_alerts(), 0 if offset in (2, 5) else 1)
+                self.assertEqual(StockExpiryAlert.objects.filter(balance=balance, reminder_days=expected_stage).count(), 1)
+            self.assertEqual(send.call_count, 3)
+        self.assertEqual(set(StockExpiryAlert.objects.filter(balance=balance).values_list("reminder_days", flat=True)), {7, 3, 1})
+
+    def test_missed_expiry_stage_only_sends_nearest_due_reminder(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.expires_on = today + timedelta(days=2)
+        balance.save(update_fields=["expires_on"])
+        StockNotificationSettings.objects.create(
+            owner=self.user, expiry_reminder_days="7,3,1",
+            feishu_webhook="https://open.feishu.cn/open-apis/bot/v2/hook/test",
+        )
+        self.assertEqual(enqueue_expiry_alerts(today), 1)
+        self.assertEqual(list(StockExpiryAlert.objects.values_list("reminder_days", flat=True)), [3])
+
+    def test_expiry_reminders_wait_until_ten_am_shanghai_time(self):
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        from django.utils import timezone
+
+        local = ZoneInfo("Asia/Shanghai")
+        today = timezone.localdate()
+        self.assertIsNone(expiry_send_date(datetime(2026, 10, 16, 9, 59, tzinfo=local)))
+        self.assertEqual(expiry_send_date(datetime(2026, 10, 16, 10, 0, tzinfo=local)).isoformat(), "2026-10-16")
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.expires_on = today + timedelta(days=1)
+        balance.save(update_fields=["expires_on"])
+        StockNotificationSettings.objects.create(
+            owner=self.user, expiry_reminder_days="1",
+            feishu_webhook="https://open.feishu.cn/open-apis/bot/v2/hook/test",
+        )
+        enqueue_expiry_alerts(today)
+        with patch("stock.notifications.expiry_send_date", return_value=None), patch("stock.notifications._send_feishu") as send:
+            self.assertEqual(dispatch_expiry_alerts(), 0)
+            send.assert_not_called()
+        self.assertEqual(StockExpiryAlert.objects.get(balance=balance).status, StockExpiryAlert.Status.PENDING)
+
+    def test_worker_only_scans_expiry_after_ten_am(self):
+        from django.utils import timezone
+
+        with patch("stock.management.commands.dispatch_alerts.expiry_send_date", return_value=None), \
+             patch("stock.management.commands.dispatch_alerts.enqueue_expiry_alerts") as enqueue, \
+             patch("stock.management.commands.dispatch_alerts.dispatch_expiry_alerts") as dispatch:
+            call_command("dispatch_alerts", "--once")
+            enqueue.assert_not_called()
+            dispatch.assert_not_called()
+        today = timezone.localdate()
+        with patch("stock.management.commands.dispatch_alerts.expiry_send_date", return_value=today), \
+             patch("stock.management.commands.dispatch_alerts.enqueue_expiry_alerts") as enqueue, \
+             patch("stock.management.commands.dispatch_alerts.dispatch_expiry_alerts", return_value=0):
+            call_command("dispatch_alerts", "--once")
+            enqueue.assert_called_once_with(today)
 
     def test_batch_inbound_uses_shared_defaults_and_rolls_back_invalid_rows(self):
         self.client.force_login(self.user)
@@ -415,8 +587,21 @@ class StockFlowTests(TestCase):
             movement.refresh_from_db()
             self.assertIsNone(movement.erp_callback_sent_at)
             self.assertEqual(movement.erp_callback_attempts, 1)
+            http_error = HTTPError('http://erp.test/api/orders/stock-outbound', 404, 'Not Found', {},
+                                   BytesIO(b'{"detail":"ERP order missing"}'))
+            with patch('stock.erp_callback.request.urlopen', side_effect=http_error):
+                self.assertFalse(send_outbound_callback(movement.id))
+            movement.refresh_from_db()
+            self.assertIn('ERP order missing', movement.erp_callback_error)
             response = MagicMock()
             response.__enter__.return_value.status = 200
+            response.__enter__.return_value.read.return_value = b'<html>proxy page</html>'
+            with patch('stock.erp_callback.request.urlopen', return_value=response):
+                self.assertFalse(send_outbound_callback(movement.id))
+            movement.refresh_from_db()
+            self.assertIsNone(movement.erp_callback_sent_at)
+            self.assertIn('有效 JSON', movement.erp_callback_error)
+            response.__enter__.return_value.read.return_value = b'{"id": 42, "created": true}'
             with patch('stock.erp_callback.request.urlopen', return_value=response) as outgoing:
                 self.assertTrue(send_outbound_callback(movement.id))
                 payload = json.loads(outgoing.call_args.args[0].data)
@@ -425,6 +610,41 @@ class StockFlowTests(TestCase):
                 self.assertEqual(outgoing.call_args.args[0].get_header('X-stock-user-id'), str(self.user.pk))
             self.assertTrue(send_outbound_callback(movement.id))
             self.assertEqual(outgoing.call_count, 1)
+            with patch('stock.erp_callback.request.urlopen', side_effect=OSError('retry failed')):
+                self.assertFalse(send_outbound_callback(movement.id, force=True))
+            movement.refresh_from_db()
+            self.assertIsNone(movement.erp_callback_sent_at)
+            self.assertIn('retry failed', movement.erp_callback_error)
+
+    def test_failed_callback_has_persistent_warning_and_movement_status(self):
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        self.client.force_login(self.user)
+        with patch.dict(os.environ, {'STOCK_ERP_CALLBACK_URL': 'http://erp.test/api/orders/stock-outbound', 'STOCK_ERP_API_KEY': 'test-key'}):
+            with patch('stock.erp_callback.request.urlopen', side_effect=OSError('offline')):
+                response = self.client.post(reverse('outbound', args=[order.lines.get().pk]), {
+                    'warehouse_id': self.a.pk, 'quantity': 1, 'tracking_number': 'YT123',
+                    'operation_id': str(uuid.uuid4()),
+                }, follow=True)
+        self.assertContains(response, 'ERP 回填失败')
+        self.assertContains(response, 'ERP 回填失败 <span>1</span>', html=True)
+        movement = StockMovement.objects.get(movement_type=StockMovement.Type.OUTBOUND)
+        self.assertIsNone(movement.erp_callback_sent_at)
+        failed_page = self.client.get(reverse('movements'), {'callback': 'failed'})
+        self.assertContains(failed_page, 'YT123')
+        self.assertContains(failed_page, 'offline')
+        self.assertContains(failed_page, '下次重试')
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        response.__enter__.return_value.read.return_value = b'{"id": 42, "created": false}'
+        with patch.dict(os.environ, {'STOCK_ERP_CALLBACK_URL': 'http://erp.test/api/orders/stock-outbound', 'STOCK_ERP_API_KEY': 'test-key'}):
+            with patch('stock.erp_callback.request.urlopen', return_value=response):
+                retry = self.client.post(reverse('retry_outbound_callback', args=[movement.id]), follow=True)
+        self.assertContains(retry, '已由 ERP 确认')
+        self.assertNotContains(self.client.get(reverse('movements'), {'callback': 'failed'}), 'YT123')
+        self.assertContains(self.client.get(reverse('movements'), {'callback': 'sent'}), '已回填')
+        other = get_user_model().objects.create_user(username='other-callback', password='test-password', is_staff=True)
+        self.client.force_login(other)
+        self.assertEqual(self.client.post(reverse('retry_outbound_callback', args=[movement.id])).status_code, 404)
 
     def test_order_resync_does_not_reset_outbound_and_cancel_does_not_restore_stock(self):
         order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
@@ -610,6 +830,12 @@ class AccountIsolationTests(TestCase):
         foreign_balance = StockBalance.objects.get(warehouse=self.warehouse_b)
         self.assertEqual(self.client.post(reverse("edit_inventory_quantity", args=[foreign_balance.pk]), {
             "expected_quantity": "5", "new_quantity": "0",
+        }).status_code, 404)
+        self.assertEqual(self.client.post(reverse("update_inventory_note", args=[foreign_balance.pk]), {
+            "note": "越权修改",
+        }).status_code, 404)
+        self.assertEqual(self.client.post(reverse("update_inventory_expiry", args=[foreign_balance.pk]), {
+            "expires_on": "2026-12-31",
         }).status_code, 404)
         foreign_balance.refresh_from_db()
         self.assertEqual(foreign_balance.on_hand, 5)

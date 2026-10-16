@@ -44,6 +44,7 @@ TEMPLATES = [{
         "django.template.context_processors.request",
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
+        "stock.context_processors.erp_callback_alerts",
     ]},
 }]
 WSGI_APPLICATION = "config.wsgi.application"

@@ -41,6 +41,9 @@ const refreshOrderAvailability = () => {
   return batchValid;
 };
 refreshOrderAvailability();
+document.addEventListener("stock:search-updated", (event) => {
+  if (event.detail?.target === "order-results") refreshOrderAvailability();
+});
 document.addEventListener("input", (event) => {
   if (event.target instanceof HTMLInputElement && event.target.matches('.outbound-form input[name="quantity"]')) refreshOrderAvailability();
 });
@@ -87,42 +90,80 @@ const showInlineToast = (message, kind) => {
   setTimeout(() => toast.remove(), 4000);
 };
 
-document.addEventListener("submit", async (event) => {
-  const form = event.target;
-  if (!(form instanceof HTMLFormElement) || !form.classList.contains("inventory-cost-form")) return;
-  event.preventDefault();
-  const input = form.elements.namedItem("unit_cost");
-  const button = form.querySelector('button[type="submit"]');
-  if (!(input instanceof HTMLInputElement) || !(button instanceof HTMLButtonElement)) return;
-  button.disabled = true;
-  try {
-    const response = await fetch(form.action, {
-      method: "POST", body: new FormData(form),
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "保存失败，请重试");
-    input.value = result.unit_cost;
-    const updatedCell = form.closest("tr")?.lastElementChild;
-    if (updatedCell) updatedCell.textContent = result.updated_at;
-    showInlineToast(result.message, "success");
-  } catch (error) {
-    showInlineToast(error.message || "保存失败，请重试", "error");
-  } finally {
-    button.disabled = false;
+const inventoryInlineFields = {
+  "inventory-quantity-form": { input: "new_quantity", original: "expected_quantity", result: "quantity" },
+  "inventory-cost-form": { input: "unit_cost", original: null, result: "unit_cost" },
+  "inventory-note-form": { input: "note", original: "expected_note", result: "note" },
+  "inventory-expiry-form": { input: "expires_on", original: "expected_expiry", result: "expires_on" },
+};
+const inventoryInlineField = (form) => Object.entries(inventoryInlineFields)
+  .find(([className]) => form.classList.contains(className))?.[1];
+const inventoryInlineOriginal = (form, field) => field.original
+  ? form.elements.namedItem(field.original)?.value ?? ""
+  : form.dataset.savedValue ?? form.elements.namedItem(field.input)?.value ?? "";
+const finishInventoryInlineEdit = (form) => form.classList.remove("is-editing");
+
+// Delegated events continue to work when live search replaces the table body.
+document.addEventListener("dblclick", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const display = target.closest(".inventory-inline-value");
+  const form = display?.closest(".inventory-inline-form");
+  if (!(form instanceof HTMLFormElement) || form.dataset.saving === "true") return;
+  const field = inventoryInlineField(form);
+  const input = field && form.elements.namedItem(field.input);
+  if (!(input instanceof HTMLInputElement)) return;
+  if (!field.original) form.dataset.savedValue = input.value;
+  form.classList.add("is-editing");
+  input.focus();
+  if (input.type !== "date") input.select();
+});
+document.addEventListener("keydown", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.classList.contains("inventory-inline-value") && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    return;
   }
+  if (!(target instanceof HTMLInputElement) || !target.closest(".inventory-inline-form")) return;
+  const form = target.closest(".inventory-inline-form");
+  if (event.key === "Escape") {
+    event.preventDefault();
+    target.value = inventoryInlineOriginal(form, inventoryInlineField(form));
+    finishInventoryInlineEdit(form);
+    target.blur();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    form.requestSubmit();
+  }
+});
+document.addEventListener("focusout", (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  const form = input.closest(".inventory-inline-form.is-editing");
+  if (!(form instanceof HTMLFormElement) || form.dataset.saving === "true") return;
+  form.requestSubmit();
 });
 
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (!(form instanceof HTMLFormElement) || !form.classList.contains("inventory-quantity-form")) return;
+  if (!(form instanceof HTMLFormElement) || !form.classList.contains("inventory-inline-form")) return;
   event.preventDefault();
-  const input = form.elements.namedItem("new_quantity");
-  const original = form.elements.namedItem("expected_quantity");
-  const button = form.querySelector('button[type="submit"]');
-  if (!(input instanceof HTMLInputElement) || !(original instanceof HTMLInputElement)
-      || !(button instanceof HTMLButtonElement)) return;
-  button.disabled = true;
+  if (form.dataset.saving === "true") return;
+  const field = inventoryInlineField(form);
+  const input = field && form.elements.namedItem(field.input);
+  const original = field?.original ? form.elements.namedItem(field.original) : null;
+  if (!(input instanceof HTMLInputElement)) return;
+  if (!input.checkValidity()) {
+    input.reportValidity();
+    return;
+  }
+  if (input.value === inventoryInlineOriginal(form, field)) {
+    finishInventoryInlineEdit(form);
+    return;
+  }
+  form.dataset.saving = "true";
   try {
     const response = await fetch(form.action, {
       method: "POST", body: new FormData(form),
@@ -130,18 +171,26 @@ document.addEventListener("submit", async (event) => {
     });
     const result = await response.json();
     if (!response.ok) {
-      if (Number.isInteger(result.current_quantity)) original.value = String(result.current_quantity);
+      if (response.status === 409 && original instanceof HTMLInputElement) {
+        const current = field.result === "quantity" ? result.current_quantity : result.current_value;
+        if (current !== undefined && current !== null) original.value = String(current);
+      }
       throw new Error(result.error || "保存失败，请重试");
     }
-    input.value = String(result.quantity);
-    original.value = String(result.quantity);
+    const saved = String(result[field.result] ?? "");
+    input.value = saved;
+    if (original instanceof HTMLInputElement) original.value = saved;
+    else form.dataset.savedValue = saved;
+    const display = form.querySelector(".inventory-inline-value");
+    if (display) display.textContent = saved || "—";
     const updatedCell = form.closest("tr")?.lastElementChild;
     if (updatedCell) updatedCell.textContent = result.updated_at;
+    finishInventoryInlineEdit(form);
     showInlineToast(result.message, "success");
   } catch (error) {
     showInlineToast(error.message || "保存失败，请重试", "error");
   } finally {
-    button.disabled = input.value === original.value || !input.checkValidity();
+    delete form.dataset.saving;
   }
 });
 
@@ -164,17 +213,6 @@ if (orderImagePreview instanceof HTMLDialogElement) {
     if (image instanceof HTMLImageElement) image.removeAttribute("src");
   });
 }
-
-document.addEventListener("input", (event) => {
-  const input = event.target;
-  if (!(input instanceof HTMLInputElement) || input.name !== "new_quantity") return;
-  const form = input.closest(".inventory-quantity-form");
-  const original = form?.querySelector('input[name="expected_quantity"]');
-  const save = form?.querySelector('button[type="submit"]');
-  if (original instanceof HTMLInputElement && save instanceof HTMLButtonElement) {
-    save.disabled = input.value === original.value || !input.validity.valid;
-  }
-});
 
 const batchForm = document.getElementById("batch-inbound-form");
 if (batchForm instanceof HTMLFormElement) {
@@ -216,6 +254,7 @@ if (batchForm instanceof HTMLFormElement) {
       if (cells[1]) row.querySelector('input[name="quantity"]').value = cells[1];
       if (cells[2]) row.querySelector('input[name="unit_cost"]').value = cells[2];
       if (cells[3]) row.querySelector('input[name="note"]').value = cells[3];
+      if (cells[4]) row.querySelector('input[name="expires_on"]').value = cells[4];
     }
   });
   try {
@@ -238,6 +277,9 @@ if (batchForm instanceof HTMLFormElement) {
 const batchOrderForm = document.getElementById("batch-order-outbound-form");
 if (batchOrderForm instanceof HTMLFormElement) {
   const selected = () => [...document.querySelectorAll(".batch-order-select:checked")];
+  document.addEventListener("stock:search-updated", (event) => {
+    if (event.detail?.target === "order-results") document.getElementById("batch-order-count").textContent = "已选 0 条";
+  });
   document.addEventListener("change", (event) => {
     if (event.target instanceof HTMLInputElement && event.target.classList.contains("batch-order-select")) {
       document.getElementById("batch-order-count").textContent = `已选 ${selected().length} 条`;

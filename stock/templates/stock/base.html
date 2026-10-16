@@ -20,6 +20,7 @@
       <a class="{% if active_nav == 'manual_outbound' %}active{% endif %}" href="{% url 'manual_outbound' %}">批量出库</a>
       <a class="{% if active_nav == 'movements' %}active{% endif %}" href="{% url 'movements' %}">出入库流水</a>
       <a class="{% if active_nav == 'warehouses' %}active{% endif %}" href="{% url 'warehouses' %}">仓库设置</a>
+      {% if erp_callback_failed_count %}<a class="nav-callback-alert" href="{% url 'movements' %}?callback=failed">ERP 回填失败 <span>{{ erp_callback_failed_count }}</span></a>{% endif %}
       {% if perms.auth.change_user %}<a href="{% url 'stock_admin_users' %}">用户管理</a>{% endif %}
     </nav>
     <div class="user-actions"><span>{{ user.username }}</span><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="text-button" type="submit">退出</button></form></div>

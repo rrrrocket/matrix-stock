@@ -50,6 +50,8 @@ class StockBalance(models.Model):
     item = models.ForeignKey(StockItem, on_delete=models.PROTECT, related_name="balances")
     on_hand = models.PositiveIntegerField("实物库存", default=0)
     avg_unit_cost = models.DecimalField("库存成本单价", max_digits=14, decimal_places=4, null=True, blank=True)
+    note = models.CharField("库存备注", max_length=500, blank=True)
+    expires_on = models.DateField("过期时间", null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -183,3 +185,36 @@ class OrderAlert(models.Model):
 
     class Meta:
         ordering = ["created_at", "id"]
+
+
+class StockNotificationSettings(models.Model):
+    owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stock_notification_settings")
+    expiry_reminder_days = models.CharField("提前提醒天数", max_length=100, default="7,3,1")
+    feishu_webhook = models.URLField("飞书机器人地址", max_length=500, blank=True)
+    feishu_secret = models.CharField("飞书签名密钥", max_length=200, blank=True)
+    wecom_webhook = models.URLField("企业微信机器人地址", max_length=500, blank=True)
+
+
+class StockExpiryAlert(models.Model):
+    class Channel(models.TextChoices):
+        FEISHU = "feishu", "飞书"
+        WECOM = "wecom", "企业微信"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "待发送"
+        SENDING = "sending", "发送中"
+        SENT = "sent", "已发送"
+
+    balance = models.ForeignKey(StockBalance, on_delete=models.CASCADE, related_name="expiry_alerts")
+    expires_on = models.DateField()
+    reminder_days = models.PositiveSmallIntegerField(default=30)
+    channel = models.CharField(max_length=10, choices=Channel.choices)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=500, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["balance", "expires_on", "channel", "reminder_days"], name="unique_stock_expiry_alert_stage")]
