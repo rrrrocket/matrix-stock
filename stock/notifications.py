@@ -34,7 +34,7 @@ def _active_expiry_stage(expires_on, today, stages):
 
 def expiry_send_date(now=None):
     local_now = timezone.localtime(now) if now is not None else timezone.localtime()
-    return local_now.date() if local_now.hour >= 20 else None
+    return local_now.date() if local_now.hour >= 21 else None
 
 
 def _clean(value):
@@ -135,7 +135,8 @@ def dispatch_expiry_alerts(limit=20):
     sent = 0
     for alert_id in candidates:
         with transaction.atomic():
-            alert = StockExpiryAlert.objects.select_for_update().select_related("balance__warehouse__owner", "balance__item").get(pk=alert_id)
+            # The owner relation is nullable; PostgreSQL can only lock the alert row here.
+            alert = StockExpiryAlert.objects.select_related("balance__warehouse__owner", "balance__item").select_for_update(of=("self",)).get(pk=alert_id)
             if alert.status == StockExpiryAlert.Status.SENT:
                 continue
             if alert.status == StockExpiryAlert.Status.SENDING and alert.locked_at and alert.locked_at > timezone.now() - timedelta(minutes=5):

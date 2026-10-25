@@ -370,15 +370,15 @@ class StockFlowTests(TestCase):
         self.assertEqual(enqueue_expiry_alerts(today), 1)
         self.assertEqual(list(StockExpiryAlert.objects.values_list("reminder_days", flat=True)), [3])
 
-    def test_expiry_reminders_wait_until_eight_pm_shanghai_time(self):
+    def test_expiry_reminders_wait_until_nine_pm_shanghai_time(self):
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         from django.utils import timezone
 
         local = ZoneInfo("Asia/Shanghai")
         today = timezone.localdate()
-        self.assertIsNone(expiry_send_date(datetime(2026, 10, 16, 19, 59, tzinfo=local)))
-        self.assertEqual(expiry_send_date(datetime(2026, 10, 16, 20, 0, tzinfo=local)).isoformat(), "2026-10-16")
+        self.assertIsNone(expiry_send_date(datetime(2026, 10, 16, 20, 59, tzinfo=local)))
+        self.assertEqual(expiry_send_date(datetime(2026, 10, 16, 21, 0, tzinfo=local)).isoformat(), "2026-10-16")
         balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
         balance.expires_on = today + timedelta(days=1)
         balance.save(update_fields=["expires_on"])
@@ -392,7 +392,35 @@ class StockFlowTests(TestCase):
             send.assert_not_called()
         self.assertEqual(StockExpiryAlert.objects.get(balance=balance).status, StockExpiryAlert.Status.PENDING)
 
-    def test_worker_only_scans_expiry_after_eight_pm(self):
+    def test_one_day_expiry_reminder_dispatches_at_nine_pm(self):
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+
+        balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
+        balance.expires_on = date(2026, 10, 26)
+        balance.save(update_fields=["expires_on"])
+        StockNotificationSettings.objects.create(
+            owner=self.user, expiry_reminder_days="7,3,1",
+            feishu_webhook="https://open.feishu.cn/open-apis/bot/v2/hook/test",
+        )
+        check_date = date(2026, 10, 25)
+        send_time = datetime(2026, 10, 25, 21, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with patch("stock.notifications.timezone.localtime", return_value=send_time), \
+             patch("stock.notifications.timezone.localdate", return_value=check_date), \
+             patch("stock.notifications._send_feishu") as send:
+            self.assertEqual(enqueue_expiry_alerts(check_date), 1)
+            self.assertEqual(dispatch_expiry_alerts(), 1)
+            self.assertEqual(enqueue_expiry_alerts(check_date), 0)
+            self.assertEqual(dispatch_expiry_alerts(), 0)
+
+        alert = StockExpiryAlert.objects.get(balance=balance)
+        self.assertEqual(alert.reminder_days, 1)
+        self.assertEqual(alert.status, StockExpiryAlert.Status.SENT)
+        self.assertEqual(alert.attempts, 1)
+        send.assert_called_once()
+        self.assertIn("2026-10-26", send.call_args.args[0])
+
+    def test_worker_only_scans_expiry_after_nine_pm(self):
         from django.utils import timezone
 
         with patch("stock.management.commands.dispatch_alerts.expiry_send_date", return_value=None), \
