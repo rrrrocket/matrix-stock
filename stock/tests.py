@@ -370,15 +370,15 @@ class StockFlowTests(TestCase):
         self.assertEqual(enqueue_expiry_alerts(today), 1)
         self.assertEqual(list(StockExpiryAlert.objects.values_list("reminder_days", flat=True)), [3])
 
-    def test_expiry_reminders_wait_until_ten_am_shanghai_time(self):
+    def test_expiry_reminders_wait_until_eight_pm_shanghai_time(self):
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         from django.utils import timezone
 
         local = ZoneInfo("Asia/Shanghai")
         today = timezone.localdate()
-        self.assertIsNone(expiry_send_date(datetime(2026, 10, 16, 9, 59, tzinfo=local)))
-        self.assertEqual(expiry_send_date(datetime(2026, 10, 16, 10, 0, tzinfo=local)).isoformat(), "2026-10-16")
+        self.assertIsNone(expiry_send_date(datetime(2026, 10, 16, 19, 59, tzinfo=local)))
+        self.assertEqual(expiry_send_date(datetime(2026, 10, 16, 20, 0, tzinfo=local)).isoformat(), "2026-10-16")
         balance = StockBalance.objects.get(warehouse=self.a, item__sku="SKU-1")
         balance.expires_on = today + timedelta(days=1)
         balance.save(update_fields=["expires_on"])
@@ -392,7 +392,7 @@ class StockFlowTests(TestCase):
             send.assert_not_called()
         self.assertEqual(StockExpiryAlert.objects.get(balance=balance).status, StockExpiryAlert.Status.PENDING)
 
-    def test_worker_only_scans_expiry_after_ten_am(self):
+    def test_worker_only_scans_expiry_after_eight_pm(self):
         from django.utils import timezone
 
         with patch("stock.management.commands.dispatch_alerts.expiry_send_date", return_value=None), \
@@ -407,6 +407,22 @@ class StockFlowTests(TestCase):
              patch("stock.management.commands.dispatch_alerts.dispatch_expiry_alerts", return_value=0):
             call_command("dispatch_alerts", "--once")
             enqueue.assert_called_once_with(today)
+
+    def test_worker_rescans_expiry_during_the_same_day(self):
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        with patch("stock.management.commands.dispatch_alerts.expiry_send_date", return_value=today), \
+             patch("stock.management.commands.dispatch_alerts.time.monotonic", side_effect=[0, 30, 61]), \
+             patch("stock.management.commands.dispatch_alerts.time.sleep", side_effect=[None, None, StopIteration]), \
+             patch("stock.management.commands.dispatch_alerts.enqueue_expiry_alerts") as enqueue, \
+             patch("stock.management.commands.dispatch_alerts.dispatch_pending_alerts", return_value=0), \
+             patch("stock.management.commands.dispatch_alerts.dispatch_outbound_callbacks", return_value=0), \
+             patch("stock.management.commands.dispatch_alerts.dispatch_expiry_alerts", return_value=0):
+            with self.assertRaises(StopIteration):
+                call_command("dispatch_alerts")
+        self.assertEqual(enqueue.call_count, 2)
+        enqueue.assert_any_call(today)
 
     def test_batch_inbound_uses_shared_defaults_and_rolls_back_invalid_rows(self):
         self.client.force_login(self.user)

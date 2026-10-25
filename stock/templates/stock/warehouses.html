@@ -6,7 +6,7 @@
   <section class="card panel"><div class="panel-head"><h2>新增仓库</h2></div><form method="post" class="form-stack">{% csrf_token %}<label>仓库编码<input name="code" maxlength="40" required></label><label>仓库名称<input name="name" maxlength="100" required></label><button class="button primary" type="submit">创建仓库</button></form></section>
 </div>
 <section class="card panel notification-settings-panel">
-  <div class="panel-head"><h2>库存到期提醒（每日 10:00）</h2></div>
+  <div class="panel-head"><h2>库存到期提醒（每日 20:00）</h2></div>
   <form method="post" action="{% url 'update_notification_settings' %}" class="form-stack">{% csrf_token %}
     <label>提前提醒天数（例如 7,3,1）<input name="expiry_reminder_days" maxlength="100" value="{% if notification_settings %}{{ notification_settings.expiry_reminder_days }}{% else %}7,3,1{% endif %}" required></label>
     <label>飞书机器人 Webhook<input type="url" name="feishu_webhook" maxlength="500" value="{{ notification_settings.feishu_webhook }}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."></label>

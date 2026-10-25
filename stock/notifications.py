@@ -34,7 +34,7 @@ def _active_expiry_stage(expires_on, today, stages):
 
 def expiry_send_date(now=None):
     local_now = timezone.localtime(now) if now is not None else timezone.localtime()
-    return local_now.date() if local_now.hour >= 10 else None
+    return local_now.date() if local_now.hour >= 20 else None
 
 
 def _clean(value):

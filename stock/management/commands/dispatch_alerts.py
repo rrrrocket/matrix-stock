@@ -15,11 +15,15 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         last_expiry_scan_date = None
+        last_expiry_scan_at = None
         while True:
             send_date = expiry_send_date()
-            if send_date is not None and last_expiry_scan_date != send_date:
+            scan_at = time.monotonic()
+            if send_date is not None and (last_expiry_scan_date != send_date or
+                                          last_expiry_scan_at is None or scan_at - last_expiry_scan_at >= 60):
                 enqueue_expiry_alerts(send_date)
                 last_expiry_scan_date = send_date
+                last_expiry_scan_at = scan_at
             sent = dispatch_pending_alerts()
             if sent:
                 self.stdout.write(f"已发送 {sent} 条自有仓提醒")
