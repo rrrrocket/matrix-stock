@@ -38,8 +38,6 @@ cd /home/ubuntu/matrix-stock
 
 `./start.sh` 在生产服务器启动 PostgreSQL、Web 和重试进程，自动执行迁移与管理员同步、连接 NPM 网络，并在结束时显示容器状态。只需执行这一个启动命令。本机测试使用 `./start.sh test`，测试重试进程使用 `./start.sh test worker`。数据库使用 Docker 卷 `matrix-stock_stock_db`，重新构建容器不会删除数据。**不要运行 `docker compose down -v`。**
 
-构建 Python 依赖时默认使用清华 PyPI 镜像。如果服务器连接该镜像较慢，可在 `.env.production` 中设置 `STOCK_PIP_INDEX_URL=https://pypi.org/simple`，再运行 `./start.sh`。此项只影响镜像构建，不影响运行中的数据库。
-
 ## 4. 在 NPM 配置域名和 HTTPS
 
 打开生产环境 Nginx Proxy Manager 管理页 [npm.matrix-one.tech](https://npm.matrix-one.tech/) 并登录。进入 **Hosts → Proxy Hosts → Add Proxy Host**，在 **Details** 页签填写：

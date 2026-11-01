@@ -17,10 +17,7 @@ services:
       retries: 10
 
   web:
-    build:
-      context: .
-      args:
-        PIP_INDEX_URL: ${STOCK_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    build: .
     restart: unless-stopped
     env_file: ${STOCK_ENV_FILE:-.env.production}
     environment:
@@ -49,10 +46,7 @@ services:
       --workers 2 --threads 4 --access-logfile - --error-logfile -"
 
   worker:
-    build:
-      context: .
-      args:
-        PIP_INDEX_URL: ${STOCK_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    build: .
     restart: unless-stopped
     env_file: ${STOCK_ENV_FILE:-.env.production}
     environment:
