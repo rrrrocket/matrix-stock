@@ -859,6 +859,21 @@ class AccountIsolationTests(TestCase):
         }
         self.order_b, _ = upsert_external_order(self.payload, owner_id=self.user_b.pk)
 
+    def test_dashboard_stock_value_uses_current_account_balances(self):
+        own_balance = StockBalance.objects.get(warehouse=self.warehouse_a)
+        own_balance.avg_unit_cost = Decimal("12.3456")
+        own_balance.save(update_fields=["avg_unit_cost"])
+        foreign_balance = StockBalance.objects.get(warehouse=self.warehouse_b)
+        foreign_balance.avg_unit_cost = Decimal("99.0000")
+        foreign_balance.save(update_fields=["avg_unit_cost"])
+        record_inbound(warehouse_id=self.warehouse_a.pk, sku="NO-COST", quantity=2, operator=self.user_a)
+
+        self.client.force_login(self.user_a)
+        response = self.client.get(reverse("dashboard"))
+        self.assertEqual(response.context["stock_value"], Decimal("37.0368"))
+        self.assertContains(response, "现有库存价值")
+        self.assertContains(response, "¥37.04")
+
     def test_staff_pages_and_writes_are_scoped_to_account(self):
         self.client.force_login(self.user_a)
         for page in ("dashboard", "warehouses", "inventory", "movements", "orders"):

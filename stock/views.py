@@ -6,6 +6,7 @@ import secrets
 import uuid
 from collections import defaultdict
 from datetime import timedelta
+from decimal import Decimal
 from functools import wraps
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -13,7 +14,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.db.models import Q, Sum
+from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from django.db import transaction
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -92,11 +93,17 @@ def _order_rows(owner, status_filter="open", query=""):
 @require_GET
 def dashboard(request):
     rows = [line for line in _order_rows(request.user) if line.needs_action]
+    balances = StockBalance.objects.filter(warehouse__owner=request.user, on_hand__gt=0)
+    stock_value = balances.aggregate(total=Sum(ExpressionWrapper(
+        F("on_hand") * F("avg_unit_cost"),
+        output_field=DecimalField(max_digits=30, decimal_places=4),
+    )))["total"] or Decimal("0")
     context = {
         "active_nav": "dashboard",
         "warehouse_count": Warehouse.objects.filter(owner=request.user, is_active=True).count(),
-        "sku_count": StockBalance.objects.filter(warehouse__owner=request.user, on_hand__gt=0).values("item_id").distinct().count(),
-        "stock_total": StockBalance.objects.filter(warehouse__owner=request.user).aggregate(total=Sum("on_hand"))["total"] or 0,
+        "sku_count": balances.values("item_id").distinct().count(),
+        "stock_total": balances.aggregate(total=Sum("on_hand"))["total"] or 0,
+        "stock_value": stock_value,
         "pending_count": len(rows),
         "pending_rows": rows[:8],
         "recent_movements": StockMovement.objects.select_related("warehouse", "item", "operator").filter(warehouse__owner=request.user)[:6],

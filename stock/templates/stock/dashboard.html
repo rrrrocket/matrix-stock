@@ -4,6 +4,7 @@
 <div class="metric-grid">
   <a class="card metric metric-link" href="{% url 'orders' %}"><span>待处理订单商品</span><strong>{{ pending_count }}</strong></a>
   <a class="card metric metric-link" href="{% url 'inventory' %}"><span>现有实物库存</span><strong>{{ stock_total }}</strong></a>
+  <a class="card metric metric-link" href="{% url 'inventory' %}"><span>现有库存价值</span><strong>¥{{ stock_value|floatformat:2 }}</strong></a>
   <a class="card metric metric-link" href="{% url 'inventory' %}"><span>在库货号</span><strong>{{ sku_count }}</strong></a>
   <a class="card metric metric-link" href="{% url 'warehouses' %}"><span>启用仓库</span><strong>{{ warehouse_count }}</strong></a>
 </div>
