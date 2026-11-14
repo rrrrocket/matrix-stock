@@ -64,7 +64,13 @@ def _inventory_rows(owner, query="", warehouse_id=""):
 def _order_rows(owner, status_filter="open", query=""):
     lines = OrderLine.objects.select_related("order").filter(order__owner=owner, is_present=True)
     if status_filter == "open":
-        lines = lines.filter(order__status=ExternalOrder.Status.OPEN, is_skipped=False, quantity__gt=0)
+        available_skus = StockBalance.objects.filter(
+            warehouse__owner=owner, warehouse__is_active=True, on_hand__gt=0,
+        ).values("item__sku")
+        lines = lines.filter(
+            order__status=ExternalOrder.Status.OPEN, is_skipped=False,
+            quantity__gt=F("outbound_quantity"), sku__in=available_skus,
+        )
     elif status_filter == "paused":
         lines = lines.filter(order__status=ExternalOrder.Status.OPEN, is_skipped=True)
     elif status_filter == "closed":

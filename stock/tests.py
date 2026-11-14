@@ -511,6 +511,26 @@ class StockFlowTests(TestCase):
         self.assertEqual(stale.json()["current_quantity"], 8)
         self.assertEqual(StockBalance.objects.get(pk=balance.pk).on_hand, 8)
 
+    def test_pending_orders_require_available_stock(self):
+        order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(reverse("orders")), "posting-1")
+        StockBalance.objects.filter(item__sku="SKU-1").update(on_hand=0)
+        self.assertNotContains(self.client.get(reverse("orders")), "posting-1")
+        self.assertContains(self.client.get(reverse("orders"), {"status": "all"}), "posting-1")
+        record_inbound(warehouse_id=self.a.pk, sku="SKU-1", quantity=1, operator=self.user)
+        self.assertContains(self.client.get(reverse("orders")), "posting-1")
+        self.a.is_active = False
+        self.a.save(update_fields=["is_active"])
+        self.assertNotContains(self.client.get(reverse("orders")), "posting-1")
+
+    def test_orders_show_order_time_after_order_number(self):
+        payload = {**self.payload, "ordered_at": "2026-11-15T02:30:00Z"}
+        upsert_external_order(payload, owner_id=self.user.pk)
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("orders"))
+        self.assertContains(response, "posting-1 · 下单时间 2026-11-15 10:30")
+
     def test_order_can_resume_after_temporarily_skipping(self):
         order, _ = upsert_external_order(self.payload, owner_id=self.user.pk)
         line = order.lines.get()
